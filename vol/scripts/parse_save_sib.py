@@ -12,6 +12,8 @@ def read_line(log, timeout):
             return ""
         line = log.readline()
         if not len(line):
+            # no new data yet: don't spin, srsue needs the CPU in real time
+            time.sleep(0.05)
             continue
         buffer_line += line
         if buffer_line[-1] == "\n":
