@@ -1,6 +1,11 @@
 ## lte searcher LTE and MIB/SIB parser
 
-A combination of cell_search and srsue with disabled tx, which allows to parse MIBs and SIBs.
+A combination of cell_search and a receive-only srsue, which allows to parse MIBs and SIBs.
+
+> **Note:** srsue is made receive-only by `worker/rx_only.patch`: its radio never
+> transmits and never retunes for the uplink. Earlier versions of this project
+> relied on `sib_logger.patch`, which does not disable TX — srsue would attempt
+> an RRC connection (PRACH) on the SDR's TX port.
 
 logic:
 - cell_search
@@ -10,6 +15,8 @@ logic:
 - when there are no stations left from SIB5, continue the cell_search search from the place where it was stopped
 - all MIBs/SIBs are stored into sqlite
 
+With a HackRF, `-S` replaces cell_search with a spectrum sweep (see [HackRF usage](#hackrf-usage)).
+
 ## launch
 
 - docker compose build
@@ -17,7 +24,7 @@ logic:
 - ./run.sh
 - ./sib-scan.sh -h
 
-Tested on linux with Limesdr mini and Limesdr USB (via soapy). Should work with usrp and bladerf since srsRAN support them.
+Tested on linux with Limesdr mini and Limesdr USB (via soapy) and HackRF One (via soapy, see below). Should work with usrp and bladerf since srsRAN support them.
 
 ```bash
 ./sib-scan.sh -h
@@ -26,9 +33,17 @@ usage: sib-scan.sh [OPTION]...
   -d      device name (UHD,soapy,bladeRF)
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
+  -r      force srsue rf sample rate in Hz, srsue decimates in software
+          (the ratio to the cell's sample rate must be an integer)
+  -p      frequency correction in ppm for SDR clock error, positive
+          tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
+          -p auto measures it on the band's LTE cells (HackRF, needs -b)
   -b      lte band
   -s      start earfcn
   -e      end earfcn
+  -S      find carriers with hackrf_sweep instead of cell_search (HackRF
+          only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
+          otherwise each carrier is tried on the 3 closest EARFCNs.
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q "1300 1301 1302 1303"
   -n      no reqursive scan, do no scan cells from sib5
@@ -76,6 +91,30 @@ Example:
 ./sib-scan.sh -d soapy -a "rxant=LNAW" -b 3
 ```
 
+### HackRF usage
+
+The HackRF One works via soapy, with some limits and quirks:
+
+- **Max 20 MSPS**: SIBs can be decoded from cells up to 10 MHz (15.36 MSPS).
+  15/20 MHz cells are found by the sweep, but srsue cannot follow them.
+- **Clock error**: HackRF crystals can be ~20 ppm off (16 kHz at 800 MHz), more
+  than srsRAN's cell search tolerates. Use `-p <ppm>`, or `-p auto` to measure
+  it on the band's LTE cells (PSS/SSS on raw IQ, `vol/scripts/calibrate_ppm.py`).
+- **cell_search is unreliable** (poor filtering at 1.92 MSPS): use `-S`, which
+  finds carriers with `hackrf_sweep` and their exact EARFCN and PCI with PSS/SSS
+  (`vol/scripts/sweep_candidates.py`), then runs srsue once per carrier.
+- **8-bit ADC**: gain matters; `-g 56` worked on B20 (800 MHz), B3 (1.8 GHz) needed `-g 70`.
+
+```bash
+./sib-scan.sh -S -p auto -d soapy -a "driver=hackrf" -g 56 -b 20
+```
+
+Measure the clock error once, then reuse it (it drifts ~1 ppm with temperature):
+```bash
+python3 scripts/calibrate_ppm.py -b 20       # prefer a low band (B20/B8)
+./sib-scan.sh -S -p 20.5 -d soapy -a "driver=hackrf" -g 70 -b 3
+```
+
 ### usrp clones usage
 
 Place the custom firmware in ./vol/helpers/uhd_images folder and give it an appropriate name, such as usrp_b210_fpga.bin. It will be automatically placed in the /usr/share/uhd/images/ folder inside the container. It's useful for devices such as USRP B210 LibreSDR clones.
@@ -90,7 +129,7 @@ connect SDR and exec into container:
 
 scan band 7 with limesdr:
 ```bash
-./sib-scan.sh -d soapy -a "rxant=LNAH" -b 7 -d /vol/output/place1_band7.sqlite
+./sib-scan.sh -d soapy -a "rxant=LNAH" -b 7 -D /vol/output/place1_band7.sqlite
 ```
 
 parse data with dbhelper scripts:

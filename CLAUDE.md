@@ -85,7 +85,8 @@ cannot be tested end-to-end without it.
   sib-scan converts ppm to `--rf.freq_offset` per EARFCN; `cell_search` gets
   `-p` via `worker/cell_search_ppm.patch`. srsRAN PSS search tolerates only a
   few kHz CFO.
-- Gain: `-g 40` works for strong cells, weaker ones need `-g 56..70`.
+- Gain: `-g 56` on B20; B3 (1.8 GHz) needs `-g 70` (at 56 srsue sees PSS at
+  PSR ~2.4 but never locks). `-r 15.36e6` makes no difference.
 - `cell_search` (C example) is unreliable with HackRF even with `-p`: finds
   cells ~1 in 5 tries, on the wrong EARFCN, with garbage ID/PRB (it restarts the
   stream per EARFCN at 1.92 MSPS). Use sweep mode instead.
@@ -103,6 +104,9 @@ cannot be tested end-to-end without it.
   `--refine`s each carrier with PSS/SSS to the exact EARFCN and drops blocks
   without LTE sync (GSM/NR); without numpy it prints the 3 closest EARFCNs and
   sib-scan skips ±2 neighbours once `has_mib.py` sees a decoded MIB.
+  Blocks closer than 0.5 MHz are merged first: lightly loaded cells have holes
+  in their spectrum. Calibration prefers blocks whose width matches a standard
+  LTE bandwidth.
 - Working command (inside container):
   `./sib-scan.sh -S -p auto -d soapy -a "driver=hackrf" -g 56 -b 20 -n`
   → B20: calibration + 3 carriers (MIB + SIBs) in ~10 min, mostly srsue SIB
@@ -118,8 +122,16 @@ cannot be tested end-to-end without it.
 1. ✅ HackRF receiving and decoding SIBs on B20.
 2. ✅ Band scanning with HackRF via sweep mode (`-S`).
 3. ✅ Automatic ppm calibration (`-p auto`) and exact EARFCN/PCI via PSS/SSS.
-4. Test B3 end to end: 10 MHz carrier should decode; check what srsue does on
-   a 20 MHz carrier (needs 30.72 MSPS > HackRF max) — at least keep the MIB.
+4. ✅ B3 end to end (`-S -p auto -g 70 -b 3`, ~6 min): 10 MHz carrier → MIB +
+   SIB1-5,7. 20 MHz carrier: srsue finds it (PRB=100) and decodes the MIB in
+   manual runs, but in the pipeline no MIB within 30 s — intermittent; not
+   worth fixing on HackRF (no SIBs possible), bladeRF covers it.
 5. Speed: tune `-t/-T` defaults, maybe stop once SIB1-5 are in.
-6. Update README (HackRF section, TX note).
-7. Further goals: to be defined with the user.
+6. ✅ README: HackRF section, TX note.
+7. **Mon 2026-09-28: bladeRF (1st gen, x40/x115 likely) test.** Needs
+   `libbladerf-dev` + FPGA image (e.g. `bladerf-fpga-hostedx40/x115`) in the
+   image so srsRAN builds its native blade RF plugin. Expect: 12-bit ADC,
+   40 MSPS (20 MHz cells OK), ~1 ppm VCTCXO (ppm calibration likely
+   unnecessary), separate RX/TX LOs, stock `cell_search` should work. Sweep
+   mode (`-S`) is HackRF-only; keep `rx_only.patch`.
+8. Further goals: to be defined with the user.

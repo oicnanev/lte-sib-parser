@@ -7,7 +7,7 @@ show_help () {
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
-          (recommended for HackRF: -r 15.36e6)
+          (the ratio to the cell's sample rate must be an integer)
   -p      frequency correction in ppm for SDR clock error, positive
           tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
           -p auto measures it on the band's LTE cells (HackRF, needs -b)
