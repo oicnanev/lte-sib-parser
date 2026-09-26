@@ -8,11 +8,13 @@ show_help () {
   -g      rx gain (default: 30)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (recommended for HackRF: -r 15.36e6)
-  -o      srsue rf frequency offset in Hz, compensates SDR clock error
-          (e.g. HackRF at -20 ppm on 800 MHz: -o 16300)
+  -p      frequency correction in ppm for SDR clock error, positive
+          tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
   -b      lte band
   -s      start earfcn
   -e      end earfcn
+  -S      find carriers with hackrf_sweep instead of cell_search (HackRF
+          only, needs -b). Each carrier is tried on the 3 closest EARFCNs.
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -72,15 +74,16 @@ device_args=""
 device_name=""
 rx_gain="30"
 srate_args=()
-freq_offset="0"
+ppm="0"
 
 do_cellsearch=1
+do_sweep=0
 no_requrse=0
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:r:o:t:T:hq:nD:?" opt; do
+while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -94,7 +97,7 @@ while getopts "s:e:b:a:d:g:r:o:t:T:hq:nD:?" opt; do
       ;;
     r)  srate_args=(--rf.srate "$OPTARG")
       ;;
-    o)  freq_offset=$OPTARG
+    p)  ppm=$OPTARG
       ;;
     b)  band=$OPTARG
       ;;
@@ -103,6 +106,8 @@ while getopts "s:e:b:a:d:g:r:o:t:T:hq:nD:?" opt; do
     e)  end_earfcn=$OPTARG
       ;;
     q)  earfcn_need_scan=($OPTARG)
+      ;;
+    S)  do_sweep=1
       ;;
     n)  no_requrse=1
       ;;
@@ -116,7 +121,16 @@ while getopts "s:e:b:a:d:g:r:o:t:T:hq:nD:?" opt; do
 done
 
 
-if [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then
+if [[ $do_sweep -ne 0 ]]; then
+  if [[ -z $band ]]; then
+    echo "-S needs band (-b)"
+    exit 1
+  fi
+  echo "sweeping band $band with hackrf_sweep..."
+  earfcn_need_scan=( $(python3 $PY_PATH/sweep_candidates.py -b "$band" -p "$ppm" -v) )
+  initial_task="choose_earfcn_for_srsue"
+  do_cellsearch=0
+elif [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then
   initial_task="cell_search"
   do_cellsearch=1
 else
@@ -194,7 +208,7 @@ while true; do
                   tail --pid=$pid -f /dev/null 2>/dev/null
                   task="exit"
                 fi
-            done < <(cell_search -b "$band" -s "$start_earfcn" -e "$end_earfcn" -a "$device_args" -d "$device_name" -g "$rx_gain")
+            done < <(cell_search -b "$band" -s "$start_earfcn" -e "$end_earfcn" -a "$device_args" -d "$device_name" -g "$rx_gain" -p "$ppm")
             continue ;;
 
         "choose_earfcn_for_srsue")
@@ -226,6 +240,8 @@ while true; do
         "srsue")
             echo "[srsue] connecting to $earfcn"
             rm /tmp/ue.log -f
+            dl_freq=$(python3 $PY_PATH/earfcn_to_freq.py $earfcn)
+            freq_offset=$(python3 -c "print(round($dl_freq * $ppm * 1e-6))")
 			      srsue $SRSUECFG --log.filename $SRSUELOG \
                             --expert.lte_sample_rates=true \
                             --rf.device_name "$device_name" \
@@ -241,6 +257,10 @@ while true; do
             kill -9 $pid 2>/dev/null
 			      tail --pid=$pid -f /dev/null 2>/dev/null
             earfcn_scanned+=($earfcn)
+            # carrier found: skip the neighbouring raster candidates of the same carrier
+            if python3 $PY_PATH/has_mib.py -d "$database" "$earfcn"; then
+                earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
+            fi
 
             if [[ $no_requrse -ne 0 ]]; then
               task="choose_earfcn_for_srsue"

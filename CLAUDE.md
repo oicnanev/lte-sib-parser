@@ -28,7 +28,8 @@ Scan logic (driven by `vol/sib-scan.sh`):
   - `sib-scan.sh` — main entry point / orchestrator (bash).
   - `scripts/` — Python helpers used by the scan: `parse_save_sib.py`
     (reads srsue log, extracts JSON, writes SQLite), `get_neigh.py`,
-    `earfcn_to_band.py`, `band_to_earfcn.py`.
+    `earfcn_to_band.py`, `band_to_earfcn.py`, `earfcn_to_freq.py`,
+    `sweep_candidates.py` (HackRF sweep carrier finder), `has_mib.py`.
   - `dbparsers/` — Python tools to inspect results (`list-cells.py`,
     `get-info.py`, `get-sib.py`, `get-arfcns.py`).
   - `helpers/ue.conf` — srsue config; `helpers/lte_bands.sqlite3` — band/EARFCN table;
@@ -61,7 +62,7 @@ cannot be tested end-to-end without it.
 
 - **HackRF One** (primary): used via Soapy (`-d soapy -a "driver=hackrf"`).
   Max 20 MSPS → SIB decoding works for cells up to 10 MHz (15.36 MSPS with
-  `lte_sample_rates`); 15/20 MHz cells only show up in `cell_search`.
+  `lte_sample_rates`); 15/20 MHz cells only show up in the sweep.
   8-bit ADC → gain tuning matters.
 - RTL-SDR (RTL2838): only useful for `cell_search`/MIB (≤2.4 MSPS, ≤1.75 GHz).
   DVB kernel modules are blacklisted on the host.
@@ -77,23 +78,31 @@ cannot be tested end-to-end without it.
   `radio::tx`, `tx_end`, `set_tx_freq`, `set_tx_gain` no-ops. Keep it.
 - SoapyHackRF has one shared LO: `set_tx_freq` retuned the radio to the UL
   frequency → no cells seen. Fixed by `rx_only.patch`.
-- The user's HackRF clock is ~**-20 ppm** (LO low): needs
-  `--rf.freq_offset` ≈ +20e-6 × f_DL (≈ +16300 Hz at 796 MHz). Passed via
-  `sib-scan.sh -o <Hz>`. srsRAN cell search tolerates only a few kHz CFO.
+- The user's HackRF clock is ~**-20 ppm** (LO low): correct with
+  `sib-scan.sh -p 20.5` (ppm, positive tunes higher). sib-scan converts it to
+  `--rf.freq_offset` per EARFCN; `cell_search` gets `-p` via
+  `worker/cell_search_ppm.patch`. srsRAN PSS search tolerates only a few kHz CFO.
 - Gain: `-g 40` works for strong cells, weaker ones need `-g 56..70`.
-- `cell_search` (C example) still fails with HackRF: runs at 1.92 MSPS
-  (poor HackRF filtering below 8 MSPS) and has no freq-offset option.
+- `cell_search` (C example) is unreliable with HackRF even with `-p`: finds
+  cells ~1 in 5 tries, on the wrong EARFCN, with garbage ID/PRB (it restarts the
+  stream per EARFCN at 1.92 MSPS). Use sweep mode instead.
+- **Sweep mode** `sib-scan.sh -S -b <band>`: `vol/scripts/sweep_candidates.py`
+  runs `hackrf_sweep` (25 kHz bins, band ±5 MHz for the noise floor), finds
+  LTE blocks by half-level edges and prints the 3 closest raster EARFCNs per
+  carrier (the centre estimate is only ±100 kHz accurate). sib-scan tries them
+  in order and skips ±2 neighbours once `has_mib.py` sees a MIB.
 - Working command (inside container):
-  `./sib-scan.sh -d soapy -a "driver=hackrf" -g 56 -o 16300 -q "6200 6400" -n`
-- Verified on B20: EARFCNs 6200 and 6400 decode MIB + SIB1-5,7.
+  `./sib-scan.sh -S -d soapy -a "driver=hackrf" -g 56 -p 20.5 -b 20 -n`
+  → B20 fully scanned (3 carriers, MIB + SIBs) in ~9 min.
 - Debug helpers: `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` runs srsue
   15 s with verbose logs; raw IQ via `hackrf_transfer` for offline PSS/CFO checks.
 
 ## Current work / plan
 
-1. ✅ HackRF receiving and decoding SIBs on B20 via `-q` EARFCN list.
-2. Make band scanning work with HackRF: patch `cell_search` (freq offset +
-   higher srate with decimation) or replace it with a sweep-based detector.
-3. Auto-calibrate the HackRF ppm error (scale offset with frequency).
-4. Test B8 / B3 (B3 needs ~+37 kHz offset; 20 MHz cells → MIB only).
-5. Further goals: to be defined with the user.
+1. ✅ HackRF receiving and decoding SIBs on B20.
+2. ✅ Band scanning with HackRF via sweep mode (`-S`).
+3. Auto-calibrate the HackRF ppm error (e.g. from the CFO srsue reports, or
+   from a known strong cell) instead of passing `-p` by hand.
+4. Test B8 / B3 (sweep sees B3 carriers; 15/20 MHz ones → srsue cannot decode).
+5. Speed up sweep mode (failed candidates cost the full srsue timeout).
+6. Further goals: to be defined with the user.
