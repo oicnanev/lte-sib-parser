@@ -158,6 +158,8 @@ cannot be tested end-to-end without it.
    custom lists run as sequential sib-scan jobs (ppm from first band reused,
    `-x` skips carriers already read — B28 overlaps B20); gain ≥1 GHz field.
 10. ✅ systemd: `systemd/install-service.sh` installs a unit running
-    `docker compose up --no-build webapp` (verified with systemd-analyze, not
-    installed: needs the user's sudo).
+    `docker compose up --no-build webapp`. Installed on the user's machine on
+    2026-09-26 (`lte-sib-parser-webapp.service`, enabled, docker enabled);
+    after code changes: `sudo systemctl restart lte-sib-parser-webapp`.
+    Boot autostart confirmed after a reboot on 2026-09-26 (up 13 s after boot).
 11. Further goals: to be defined with the user.
