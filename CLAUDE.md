@@ -176,4 +176,10 @@ cannot be tested end-to-end without it.
     `vol/helpers/earfcns/portugal.txt` (from SIB5, one location) + everything
     in readings DB. Web preset "Portugal (known EARFCNs, fast)". 19 EARFCNs
     checked in 64 s; found EARFCN 1300 that the sweep never did.
-14. Further goals: to be defined with the user.
+14. ✅ Learned EARFCNs persisted in `vol/output/earfcns_learned.json`
+    (server.update_learned, start/end of each run), Known EARFCNs panel,
+    `/api/earfcns`. README screenshot `doc/webapp.png` from fictitious data:
+    `vol/webapp/demo/make_demo_db.py` + `server.py --port 8081 --db ... --learned ...`
+    in a separate container, headless Firefox with `?view=38.70790,-9.13705,17&theme=light`.
+    Never screenshot real data for the repo.
+15. Further goals: to be defined with the user.

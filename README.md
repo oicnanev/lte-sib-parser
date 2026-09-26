@@ -11,6 +11,9 @@ and cell identity, and a local [web app](#web-app) with a live map. Every
 change is listed in
 [Changes and design decisions](#changes-and-design-decisions).
 
+![Web app with demo data](doc/webapp.png)
+*The web app ([below](#web-app)), with fictitious demo data.*
+
 > **srsue never transmits.** `worker/rx_only.patch` turns srsue's radio TX
 > functions into no-ops. The upstream project relied on `sib_logger.patch` for
 > this, but that patch only changes log levels: srsue would attempt an RRC
@@ -295,6 +298,13 @@ Open <http://localhost:8080>. It shows:
   band's duration.
 - **Theme** button in the header: Auto (follows the system), Light or Dark;
   the choice is kept in the browser. In dark mode the map tiles are darkened.
+- **Known EARFCNs** panel (collapsed): every EARFCN the known-EARFCN preset
+  will check, with band, frequency, bandwidth, where it came from (list file,
+  read, advertised in SIB5) and when a cell was last read on it.
+
+Optional URL parameters: `?view=lat,lon,zoom` opens the map at that view and
+keeps it (e.g. `http://localhost:8080/?view=38.708,-9.137,17`), and
+`?theme=light|dark` overrides the theme for that page load without saving it.
 - **Map**: your current position (with its accuracy) and one marker per place
   where readings were made, coloured by the best RSRP there; click it for the
   list of cells.
@@ -312,9 +322,13 @@ Server-Sent Events.
 The preset **Portugal (known EARFCNs, fast)** skips the band sweeps. It checks
 a list of EARFCNs for cells and runs srsue only where it finds one:
 
-1. The list is `vol/helpers/earfcns/portugal.txt` plus every EARFCN in the
-   readings database, read directly or advertised in any cell's SIB5, from any
-   earlier scan anywhere. It grows with every run.
+1. The list is `vol/helpers/earfcns/portugal.txt` plus every EARFCN learned
+   so far: read directly or advertised in any cell's SIB5, in any earlier scan
+   anywhere. Learned EARFCNs are kept in `vol/output/earfcns_learned.json`
+   (first/last reading, last SIB5 advertisement, bandwidth, operators), which is
+   updated from the readings database at the start and end of every run and
+   survives deleting the readings. So a carrier found in another city is
+   checked in every later run. To forget them, delete that file too.
 2. Each EARFCN gets a PSS/SSS check (~1 s of capture each, analysed in
    parallel). Since the EARFCN is exact, the offset measured on each cell is
    the clock error, so `ppm auto` is measured in the same pass on any band.
@@ -420,6 +434,8 @@ row per EARFCN, so the same cell read at different places or times gives
 separate rows.
 
 Table `scans`: `id`, `started`, `finished`, `band`, `ppm`, `args`.
+Learned EARFCNs are kept apart, in `vol/output/earfcns_learned.json` (see
+[Known EARFCNs](#known-earfcns)).
 
 Table `readings`:
 
@@ -496,7 +512,9 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages |
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
-| `vol/webapp/server.py` | the web app |
+| `vol/webapp/server.py` | the web app (`--port`, `--db` readings database, `--learned` learned-EARFCN file) |
+| `vol/scripts/check_earfcns.py -e "<earfcns>"` | check EARFCNs for cells with PSS/SSS, measure the clock (`-p auto`) |
+| `vol/webapp/demo/make_demo_db.py <db>` | readings database with fictitious data (test PLMN 001-01), for demos and screenshots |
 
 ## Changes and design decisions
 
@@ -665,6 +683,20 @@ Changes in this fork, newest last, with the reason for each.
     from SIB5 during the run, because no list is complete (see
     [Known EARFCNs](#known-earfcns)). `-G` sets the gain for EARFCNs above
     1 GHz, as one run now mixes low and high bands.
+30. **Learned EARFCNs kept in their own file.** The known list already grew
+    from the readings database, but deleting the readings (done twice while
+    testing) forgot every carrier found. `vol/output/earfcns_learned.json` keeps
+    each EARFCN ever read or advertised, with dates, bandwidth and operators; it
+    is outside git because regional carrier variants show where you have been.
+    The web app shows it in the Known EARFCNs panel.
+31. **Screenshot with fictitious data.** A screenshot of real use shows CGIs,
+    PCIs, TACs and the user's position, which must not be published.
+    `vol/webapp/demo/make_demo_db.py` builds a database with the 3GPP test
+    network PLMN 001-01, made-up identities and positions around Praça do
+    Comércio (Lisbon); the server's `--db`/`--learned` options serve it on
+    another port. The screenshot was taken with headless Firefox
+    (`firefox --headless --screenshot`); the `?view=` parameter exists so the
+    map tiles load with the page instead of after it.
 
 ### Known limitations
 

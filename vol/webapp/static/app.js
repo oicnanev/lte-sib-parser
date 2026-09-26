@@ -20,7 +20,13 @@ function applyTheme(t) {
   $("#theme").textContent = t[0].toUpperCase() + t.slice(1);
   try { if (t === "auto") localStorage.removeItem("theme"); else localStorage.setItem("theme", t); } catch (e) {}
 }
-applyTheme(document.documentElement.dataset.theme || "auto");
+const params = new URLSearchParams(location.search);
+if (params.has("theme")) {
+  // theme from the URL: show it on the button without saving it
+  $("#theme").textContent = (document.documentElement.dataset.theme || "auto").replace(/^./, (c) => c.toUpperCase());
+} else {
+  applyTheme(document.documentElement.dataset.theme || "auto");
+}
 $("#theme").onclick = () => {
   const cur = document.documentElement.dataset.theme || "auto";
   applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
@@ -68,7 +74,11 @@ async function api(path, body) {
 
 // ---------- map ----------
 
-const map = L.map("map", { zoomControl: true }).setView([39.5, -8.0], 7);
+// ?view=lat,lon,zoom sets the initial map view and keeps it (e.g. for sharing or screenshots)
+const urlView = (params.get("view") || "").split(",").map(Number);
+const hasView = urlView.length === 3 && urlView.every(Number.isFinite);
+const map = L.map("map", { zoomControl: true })
+  .setView(hasView ? [urlView[0], urlView[1]] : [39.5, -8.0], hasView ? urlView[2] : 7);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -76,7 +86,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 const readingsLayer = L.layerGroup().addTo(map);
 let hereMarker = null;
 let hereCircle = null;
-let centred = false;
+let centred = hasView;
 
 function rsrpColor(rsrp) {
   if (rsrp == null) return "#9ca3af";
@@ -329,6 +339,20 @@ function appendLog(lines) {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+// ---------- known EARFCNs ----------
+
+async function loadEarfcns() {
+  const rows = await api("/api/earfcns");
+  $("#earfcn-count").textContent = `(${rows.length})`;
+  $("#earfcns tbody").innerHTML = rows.map((r) => {
+    const src = [r.in_list_file ? "list" : "", r.last_seen ? "read" : "", r.last_advertised ? "SIB5" : ""]
+      .filter(Boolean).join(" · ");
+    const last = r.last_seen ? new Date(r.last_seen).toLocaleDateString() : "";
+    return `<tr><td>${esc(r.earfcn)}</td><td>${esc(r.band ?? "?")}</td><td>${esc(r.dl_freq_mhz ?? "")}</td>` +
+      `<td>${r.bandwidth_mhz != null ? esc(r.bandwidth_mhz) : ""}</td><td>${esc(src)}</td><td>${esc(last)}</td></tr>`;
+  }).join("");
+}
+
 // ---------- live events ----------
 
 function connect() {
@@ -340,6 +364,7 @@ function connect() {
     const changed = st.scan_id !== status.scan_id || st.running !== status.running;
     showStatus(st);
     if (changed) loadScans();
+    if (changed && !st.running) loadEarfcns();
   });
   es.addEventListener("backlog", (e) => {
     $("#log").textContent = "";
@@ -372,6 +397,7 @@ function connect() {
   for (const r of await api("/api/readings")) readings.set(r.id, r);
   await loadScans();
   renderTable();
+  loadEarfcns();
   connect();
   startBrowserGeo();
 })();

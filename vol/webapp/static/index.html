@@ -2,7 +2,12 @@
 <html lang="en">
 <script>
   // apply the saved theme before the page paints (no flash of the wrong theme)
-  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+  // ?theme=dark|light overrides the saved theme for this page load only
+  try {
+    const q = new URLSearchParams(location.search).get("theme");
+    const t = q || localStorage.getItem("theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
 </script>
 <head>
 <meta charset="utf-8">
@@ -91,6 +96,20 @@
       </div>
       <p class="hint" id="loc-hint">gpsd is used when it has a fix; otherwise the browser's
         position (Wi-Fi based), which you can correct by clicking on the map.</p>
+    </section>
+
+    <section class="card">
+      <details id="earfcns-card">
+        <summary><h2>Known EARFCNs <span id="earfcn-count" class="muted"></span></h2></summary>
+        <div class="table-wrap earfcn-wrap">
+          <table id="earfcns">
+            <thead><tr><th>EARFCN</th><th>Band</th><th>MHz</th><th>BW</th><th>Source</th><th>Last cell</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint">Checked by the "known EARFCNs" preset: the list file plus every EARFCN
+          read or advertised in a cell's SIB5 in any scan. New ones are added after each run.</p>
+      </details>
     </section>
 
     <section class="card log-card">

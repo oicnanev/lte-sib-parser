@@ -32,6 +32,9 @@ STATIC = os.path.join(HERE, "static")
 SIB_SCAN = os.path.join(VOL, "sib-scan.sh")
 READINGS_DB = os.path.join(VOL, "output", "readings.sqlite")
 CELLS_DB = os.path.join(VOL, "output", "cells.sqlite")
+# EARFCNs learned from readings (read, or advertised in SIB5): kept apart from the
+# readings so that deleting them does not forget where carriers are
+LEARNED = os.path.join(VOL, "output", "earfcns_learned.json")
 BANDS_DB = os.path.join(VOL, "helpers", "lte_bands.sqlite3")
 DEVICES = {"soapy", "UHD", "bladeRF", ""}
 GPS_STALE_S = 5
@@ -320,6 +323,10 @@ def job_thread(steps, ppm):
                 hub.add_log("[webapp] reusing %s ppm for the next bands" % ppm)
     if hub.stop_requested:
         hub.add_log("[webapp] stopped")
+    try:
+        update_learned()
+    except (OSError, sqlite3.Error) as e:
+        hub.add_log("[webapp] cannot update learned EARFCNs: %s" % e)
     hub.set_status(running=False, task=None, earfcn=None, step=None, band_started=None,
                    finished=readings_db.now(), exit_code=code)
 
@@ -424,27 +431,98 @@ def build_job(p):
     return steps, ppm
 
 
-def known_earfcns(filename):
-    """(earfcns to check, EARFCNs known to be 20 MHz wide): the preset's file plus
-    every EARFCN in the readings database, read or advertised in any SIB5"""
-    earfcns = []
+def seed_earfcns(filename):
+    """EARFCNs of a preset's list file (numbers at the start of a line)"""
+    out = []
     with open(os.path.join(EARFCN_LISTS, filename)) as f:
         for line in f:
             word = line.split("#", 1)[0].strip()
             if word.isdigit():
-                earfcns.append(int(word))
-    wide = set()
+                out.append(int(word))
+    return out
+
+
+def load_learned():
+    try:
+        with open(LEARNED) as f:
+            return {int(k): v for k, v in json.load(f).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def update_learned():
+    """merge the readings database into the learned-EARFCN file and return it.
+
+    Per EARFCN: first_seen / last_seen (a reading on it), last_advertised (in a
+    SIB5), bandwidth_mhz (widest known), plmns (operators seen on or advertising it)."""
+    learned = load_learned()
+
+    def entry(e):
+        return learned.setdefault(e, {"first_seen": None, "last_seen": None,
+                                      "last_advertised": None, "bandwidth_mhz": None, "plmns": []})
+
+    def later(a, b):
+        return max(x for x in (a, b) if x) if (a or b) else None
+
+    def add_plmns(d, plmns):
+        for p in (plmns or "").split():
+            if p not in d["plmns"]:
+                d["plmns"].append(p)
+
     with db() as conn:
-        for e, bw, sib5 in conn.execute("SELECT earfcn, bandwidth_mhz, sib5 FROM readings"):
-            earfcns.append(e)
-            if bw is not None and bw >= 20:
-                wide.add(e)
-            if sib5:
-                try:
-                    earfcns += [c["dl-CarrierFreq"] for c in json.loads(sib5).get("interFreqCarrierFreqList", [])]
-                except (ValueError, KeyError, TypeError):
-                    pass
-    return list(dict.fromkeys(earfcns)), sorted(wide)
+        rows = conn.execute("SELECT earfcn, time, bandwidth_mhz, plmns, sib5 FROM readings").fetchall()
+    for e, t, bw, plmns, sib5 in rows:
+        d = entry(e)
+        d["first_seen"] = min(x for x in (d["first_seen"], t) if x)
+        d["last_seen"] = later(d["last_seen"], t)
+        if bw is not None:
+            d["bandwidth_mhz"] = max(bw, d["bandwidth_mhz"] or 0)
+        add_plmns(d, plmns)
+        if sib5:
+            try:
+                carriers = json.loads(sib5).get("interFreqCarrierFreqList", [])
+            except ValueError:
+                carriers = []
+            for c in carriers:
+                a = entry(c["dl-CarrierFreq"])
+                a["last_advertised"] = later(a["last_advertised"], t)
+                add_plmns(a, plmns)
+    tmp = LEARNED + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({str(k): v for k, v in sorted(learned.items())}, f, indent=1)
+    os.replace(tmp, LEARNED)
+    return learned
+
+
+def known_earfcns(filename):
+    """(earfcns to check, EARFCNs known to be 20 MHz wide): the preset's file plus
+    every learned EARFCN (read, or advertised in a SIB5, in any earlier scan)"""
+    learned = update_learned()
+    earfcns = seed_earfcns(filename) + sorted(learned)
+    wide = sorted(e for e, d in learned.items() if (d.get("bandwidth_mhz") or 0) >= 20)
+    return list(dict.fromkeys(earfcns)), wide
+
+
+def earfcn_table(filename="portugal.txt"):
+    """rows for the web app's Known EARFCNs panel"""
+    seed = set(seed_earfcns(filename))
+    learned = update_learned()
+    with sqlite3.connect(BANDS_DB) as conn:
+        ranges = conn.execute("SELECT band, start_freq, start_earfcn, end_earfcn FROM lte").fetchall()
+    rows = []
+    for e in sorted(seed | set(learned)):
+        band, freq = None, None
+        for b, f0, e0, e1 in ranges:
+            if e0 <= e <= e1:
+                band, freq = b, round(f0 + 0.1 * (e - e0), 1)
+                break
+        d = learned.get(e, {})
+        rows.append({"earfcn": e, "band": band, "dl_freq_mhz": freq, "in_list_file": e in seed,
+                     "first_seen": d.get("first_seen"), "last_seen": d.get("last_seen"),
+                     "last_advertised": d.get("last_advertised"),
+                     "bandwidth_mhz": d.get("bandwidth_mhz"), "plmns": d.get("plmns", [])})
+    rows.sort(key=lambda r: (r["dl_freq_mhz"] is None, r["dl_freq_mhz"] or 0))
+    return rows
 
 
 def known_job(p, filename):
@@ -568,6 +646,8 @@ class Handler(BaseHTTPRequestHandler):
             bands = [dict(band=b, **v) for b, v in sorted(bands_table().items())]
             presets = [dict(id=k, **v) for k, v in PRESETS.items()]
             return self.reply(200, {"bands": bands, "presets": presets})
+        if path == "/api/earfcns":
+            return self.reply(200, earfcn_table())
         if path == "/api/scans":
             return self.reply(200, list_scans())
         if path == "/api/readings":
@@ -654,10 +734,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global READINGS_DB, LEARNED
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--db", help="readings database (default %s)" % READINGS_DB)
+    ap.add_argument("--learned", help="learned EARFCNs file (default %s)" % LEARNED)
     a = ap.parse_args()
+    if a.db:
+        READINGS_DB = os.path.abspath(a.db)
+    if a.learned:
+        LEARNED = os.path.abspath(a.learned)
     os.makedirs(os.path.dirname(READINGS_DB), exist_ok=True)
     readings_db.connect(READINGS_DB).close()
     # start from the browser/map (none yet) or gpsd; drop a stale file from an old run
