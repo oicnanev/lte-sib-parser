@@ -196,6 +196,9 @@ while True:
         if "rsrp" in msg:
             if "rsrp" in retrieved:
                 continue
+            # without this the "all retrieved" check below never passed and
+            # every cell waited for the full timeout
+            retrieved["rsrp"] = msg["rsrp"]
             print(json.dumps(msg), flush=True)
             if database:
                 write_db(database, earfcn, "rsrp", str(msg["rsrp"]))
@@ -209,7 +212,7 @@ while True:
             out = {"type": "mib", "info": mib}
             print(json.dumps(out), flush=True)
 
-            timeout += timeout_add
+            timeout = time.time() + timeout_add
             if database:
                 write_db(database, earfcn, "mib", json.dumps(mib))
 
@@ -233,7 +236,7 @@ while True:
                 out = {"type": "sib1", "info": info}
                 print(json.dumps(out), flush=True)
 
-                timeout += timeout_add
+                timeout = time.time() + timeout_add
                 if database:
                     write_db(database, earfcn, "sib1", json.dumps(info))
             else:
@@ -247,7 +250,7 @@ while True:
                             out = {"type": sibType, "info": info}
                             print(json.dumps(out), flush=True)
 
-                            timeout += timeout_add
+                            timeout = time.time() + timeout_add
                             if database:
                                 write_db(database, earfcn, sibType, json.dumps(info))
 

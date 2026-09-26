@@ -20,11 +20,11 @@ show_help () {
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
-  -t      srsue sib parsing timeout
+  -t      seconds srsue gets to decode anything (MIB) on an EARFCN
           (default: 30)
-  -T      additional timeout for srsue
-          this value will be added per each successfully decoded sib
-          (default: 30)
+  -T      after each newly decoded MIB/SIB, srsue keeps listening for
+          this many seconds more; it stops earlier once all SIBs
+          scheduled in SIB1 are decoded (default: 30)
   -D      sqlite database to save results
           (default: /vol/output/cells.sqlite)
 

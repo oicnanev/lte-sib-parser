@@ -54,6 +54,10 @@ cannot be tested end-to-end without it.
 
 ## Conventions
 
+- **Every change and design decision goes into README.md** (section "Changes
+  and design decisions" + affected usage docs), in the same commit. README is
+  in English and lists per-distro install commands. Talk to the user in PT-PT.
+
 - Python 3 scripts, plain stdlib (`sqlite3`, `json`), no package structure;
   exception: `lte_pss.py` and its users need numpy (in the image).
 - Bash for orchestration.
@@ -126,7 +130,8 @@ cannot be tested end-to-end without it.
    SIB1-5,7. 20 MHz carrier: srsue finds it (PRB=100) and decodes the MIB in
    manual runs, but in the pipeline no MIB within 30 s — intermittent; not
    worth fixing on HackRF (no SIBs possible), bladeRF covers it.
-5. Speed: tune `-t/-T` defaults, maybe stop once SIB1-5 are in.
+5. ✅ Speed: `-T` is now an idle timeout (last new MIB/SIB + T) and the early
+   stop works (RSRP was never marked received) → ~70 s per cell instead of ~3 min.
 6. ✅ README: HackRF section, TX note.
 7. **Mon 2026-09-28: bladeRF (1st gen, x40/x115 likely) test.** Needs
    `libbladerf-dev` + FPGA image (e.g. `bladerf-fpga-hostedx40/x115`) in the
