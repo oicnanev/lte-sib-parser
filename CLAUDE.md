@@ -182,4 +182,6 @@ cannot be tested end-to-end without it.
     `vol/webapp/demo/make_demo_db.py` + `server.py --port 8081 --db ... --learned ...`
     in a separate container, headless Firefox with `?view=38.70790,-9.13705,17&theme=light`.
     Never screenshot real data for the repo.
-15. Further goals: to be defined with the user.
+15. ✅ portugal.txt cross-checked with portugaltowers.eu/espetro (community-measured
+    carrier centres): identical for B20/B8/B3/B1/B7; added B28 9359, 9468 (21 EARFCNs).
+16. Further goals: to be defined with the user.

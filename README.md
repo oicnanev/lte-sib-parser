@@ -339,6 +339,13 @@ a list of EARFCNs for cells and runs srsue only where it finds one:
    yet are checked and read before the run ends, so in a new area the local
    cells extend the list.
 
+The list file was cross-checked with the carrier centre frequencies that the
+[Portugal Towers](https://portugaltowers.eu/espetro) community measured
+nationwide (September 2026): the 19 EARFCNs learned from SIB5 at one place
+matched every carrier listed for B20, B8, B3, B1 and B7, and the two B28
+carriers there (EARFCN 9359, 9468) were added. That site only lists carriers
+seen in at least 27 cells and gives centres, not bandwidths.
+
 **The list is not complete and cannot be.** A cell's SIB5 lists the
 frequencies its operator uses *in that area*; other areas may use other
 carriers (the list already has two B8 carriers 1 MHz apart, 3475 and 3485,
@@ -697,6 +704,13 @@ Changes in this fork, newest last, with the reason for each.
     another port. The screenshot was taken with headless Firefox
     (`firefox --headless --screenshot`); the `?view=` parameter exists so the
     map tiles load with the page instead of after it.
+32. **EARFCN list cross-checked with community data.** The Portugal Towers
+    spectrum page lists the carrier centres its users' phones measured, per
+    operator and band. Converted to EARFCNs they matched the SIB5-derived list
+    exactly for B20/B8/B3/B1/B7, which suggests that list is close to complete
+    nationally for those bands; B28's two carriers (9359, 9468) were missing
+    and were added even though they showed no LTE sync here (probably 5G NR),
+    because checking an EARFCN costs ~2 s.
 
 ### Known limitations
 

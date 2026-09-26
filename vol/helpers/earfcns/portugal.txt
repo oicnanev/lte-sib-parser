@@ -2,12 +2,17 @@
 # and the web app's "Portugal (known EARFCNs)" preset.
 #
 # Source: carriers decoded and EARFCNs advertised in SIB5 (interFreqCarrierFreqList)
-# by cells heard at one place in Portugal, September 2026. Not a complete national
-# list: operators use different carriers in different areas and change them over
-# time. The web app adds every EARFCN found in the readings database (read or
-# advertised in any SIB5) to this list at the start of each run.
+# by cells heard at one place in Portugal, September 2026. Cross-checked on
+# 2026-09-27 with the carrier centre frequencies measured nationwide by the
+# Portugal Towers community (https://portugaltowers.eu/espetro): identical for
+# B20, B8, B3, B1 and B7; their two B28 carriers were added. That site only lists
+# carriers seen in 27+ cells, so rare carriers can still be missing, and operators
+# change carriers over time. The web app adds every EARFCN learned from readings
+# (read or advertised in any SIB5) to this list at the start of each run.
 #
 # EARFCN   band  DL MHz
+9359     # B28   772.9   (Portugal Towers; not LTE where the list was made)
+9468     # B28   783.8   (Portugal Towers; not LTE where the list was made)
 6200     # B20   796.0
 6300     # B20   806.0
 6400     # B20   816.0
