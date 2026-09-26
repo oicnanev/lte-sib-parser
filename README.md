@@ -126,9 +126,9 @@ mounted at `/vol`):
 ```bash
 docker compose run --rm worker
 ```
-or with `./run.sh`, which also forwards X11 and PulseAudio. Note that
-`run.sh` runs `xhost +`, which disables X server access control for all
-clients until you run `xhost -`.
+or with `./run.sh`, which also forwards the X11 socket and PulseAudio. Nothing
+in the scan needs a GUI; if you need one, allow only the container's root user
+with `xhost +SI:localuser:root` (see [decision 12](#changes-and-design-decisions)).
 
 Inside the container:
 ```bash
@@ -333,6 +333,10 @@ Changes in this fork, newest last, with the reason for each.
     (scan results reveal where the scan was made); obsolete `version:` key
     removed from `docker-compose.yml`; `-d`/`-D` typo fixed in an example;
     Python `__pycache__/` ignored.
+12. **`run.sh` no longer runs `xhost +`.** It disabled X server access control
+    for every client (local and remote) until `xhost -`, only so a GUI in the
+    container could open windows, which the scan never does. If a GUI is
+    needed, `xhost +SI:localuser:root` grants access to the local root user only.
 
 ### Known limitations
 

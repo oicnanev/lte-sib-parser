@@ -1,7 +1,8 @@
 #!/bin/bash
 set -x
-# hack but works
-xhost +
+# X11 is forwarded, but access is not opened: nothing in the scan needs a GUI.
+# If you do need one, allow only the container's root user:
+#   xhost +SI:localuser:root
 docker run \
   -it --rm --privileged \
   --network=host \
