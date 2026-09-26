@@ -10,11 +10,13 @@ show_help () {
           (recommended for HackRF: -r 15.36e6)
   -p      frequency correction in ppm for SDR clock error, positive
           tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
+          -p auto measures it on the band's LTE cells (HackRF, needs -b)
   -b      lte band
   -s      start earfcn
   -e      end earfcn
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
-          only, needs -b). Each carrier is tried on the 3 closest EARFCNs.
+          only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
+          otherwise each carrier is tried on the 3 closest EARFCNs.
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -121,13 +123,31 @@ while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:?" opt; do
 done
 
 
+if [[ $ppm == "auto" ]]; then
+  if [[ -z $band ]]; then
+    echo "-p auto needs band (-b)"
+    exit 1
+  fi
+  echo "calibrating SDR clock error on band $band..."
+  ppm=$(python3 $PY_PATH/calibrate_ppm.py -b "$band")
+  if [[ $? -ne 0 || -z $ppm ]]; then
+    echo "calibration failed, pass -p <ppm> by hand"
+    exit 1
+  fi
+  echo "frequency correction: $ppm ppm"
+fi
+
 if [[ $do_sweep -ne 0 ]]; then
   if [[ -z $band ]]; then
     echo "-S needs band (-b)"
     exit 1
   fi
   echo "sweeping band $band with hackrf_sweep..."
-  earfcn_need_scan=( $(python3 $PY_PATH/sweep_candidates.py -b "$band" -p "$ppm" -v) )
+  refine=()
+  if python3 -c "import numpy" 2>/dev/null; then
+    refine=(--refine)
+  fi
+  earfcn_need_scan=( $(python3 $PY_PATH/sweep_candidates.py -b "$band" -p "$ppm" -v "${refine[@]}") )
   initial_task="choose_earfcn_for_srsue"
   do_cellsearch=0
 elif [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then

@@ -29,7 +29,8 @@ Scan logic (driven by `vol/sib-scan.sh`):
   - `scripts/` — Python helpers used by the scan: `parse_save_sib.py`
     (reads srsue log, extracts JSON, writes SQLite), `get_neigh.py`,
     `earfcn_to_band.py`, `band_to_earfcn.py`, `earfcn_to_freq.py`,
-    `sweep_candidates.py` (HackRF sweep carrier finder), `has_mib.py`.
+    `sweep_candidates.py` (HackRF sweep carrier finder), `has_mib.py`,
+    `lte_pss.py` (PSS/SSS search), `calibrate_ppm.py`.
   - `dbparsers/` — Python tools to inspect results (`list-cells.py`,
     `get-info.py`, `get-sib.py`, `get-arfcns.py`).
   - `helpers/ue.conf` — srsue config; `helpers/lte_bands.sqlite3` — band/EARFCN table;
@@ -53,7 +54,8 @@ cannot be tested end-to-end without it.
 
 ## Conventions
 
-- Python 3 scripts, plain stdlib (`sqlite3`, `json`), no package structure.
+- Python 3 scripts, plain stdlib (`sqlite3`, `json`), no package structure;
+  exception: `lte_pss.py` and its users need numpy (in the image).
 - Bash for orchestration.
 - srsRAN changes go into patch files in `worker/`, not a vendored tree
   (`srsRAN_4G/` is git-ignored).
@@ -78,31 +80,46 @@ cannot be tested end-to-end without it.
   `radio::tx`, `tx_end`, `set_tx_freq`, `set_tx_gain` no-ops. Keep it.
 - SoapyHackRF has one shared LO: `set_tx_freq` retuned the radio to the UL
   frequency → no cells seen. Fixed by `rx_only.patch`.
-- The user's HackRF clock is ~**-20 ppm** (LO low): correct with
-  `sib-scan.sh -p 20.5` (ppm, positive tunes higher). sib-scan converts it to
-  `--rf.freq_offset` per EARFCN; `cell_search` gets `-p` via
-  `worker/cell_search_ppm.patch`. srsRAN PSS search tolerates only a few kHz CFO.
+- The user's HackRF clock is ~**-20 ppm** (LO low; drifts 19.2-21.6 with
+  temperature): `sib-scan.sh -p <ppm>` (positive tunes higher) or `-p auto`.
+  sib-scan converts ppm to `--rf.freq_offset` per EARFCN; `cell_search` gets
+  `-p` via `worker/cell_search_ppm.patch`. srsRAN PSS search tolerates only a
+  few kHz CFO.
 - Gain: `-g 40` works for strong cells, weaker ones need `-g 56..70`.
 - `cell_search` (C example) is unreliable with HackRF even with `-p`: finds
   cells ~1 in 5 tries, on the wrong EARFCN, with garbage ID/PRB (it restarts the
   stream per EARFCN at 1.92 MSPS). Use sweep mode instead.
-- **Sweep mode** `sib-scan.sh -S -b <band>`: `vol/scripts/sweep_candidates.py`
-  runs `hackrf_sweep` (25 kHz bins, band ±5 MHz for the noise floor), finds
-  LTE blocks by half-level edges and prints the 3 closest raster EARFCNs per
-  carrier (the centre estimate is only ±100 kHz accurate). sib-scan tries them
-  in order and skips ±2 neighbours once `has_mib.py` sees a MIB.
+- **`vol/scripts/lte_pss.py`** (numpy): captures 40 ms with `hackrf_transfer` at
+  7.68 MSPS, decimates to 1.92, PSS search over CFO ±150 kHz, then **SSS**
+  check at the true CFO ±15/30 kHz — PSS (Zadoff-Chu) alone can't tell an
+  integer-subcarrier CFO alias from the truth (peaks within 1%). SSS score
+  ~0.4-0.9 for real cells, ~0.1-0.15 noise. Also gives the PCI.
+- **`calibrate_ppm.py -b <band>`**: sweeps, measures the strongest carriers,
+  assumes the raster error (k×100 kHz) giving the smallest |ppm|, prints the
+  median. Unambiguous while |ppm|·f < 50 kHz (prefer B20/B8).
+- **Sweep mode** `sib-scan.sh -S -b <band>`: `sweep_candidates.py` runs
+  `hackrf_sweep` (25 kHz bins, band ±5 MHz for the noise floor), finds LTE
+  blocks by half-level edges (centre only ±100 kHz accurate). With numpy it
+  `--refine`s each carrier with PSS/SSS to the exact EARFCN and drops blocks
+  without LTE sync (GSM/NR); without numpy it prints the 3 closest EARFCNs and
+  sib-scan skips ±2 neighbours once `has_mib.py` sees a decoded MIB.
 - Working command (inside container):
-  `./sib-scan.sh -S -d soapy -a "driver=hackrf" -g 56 -p 20.5 -b 20 -n`
-  → B20 fully scanned (3 carriers, MIB + SIBs) in ~9 min.
+  `./sib-scan.sh -S -p auto -d soapy -a "driver=hackrf" -g 56 -b 20 -n`
+  → B20: calibration + 3 carriers (MIB + SIBs) in ~10 min, mostly srsue SIB
+  collection (each new SIB extends the timeout by `-T`).
+- `parse_save_sib.py` used to busy-wait on the srsue log (100% CPU, starving
+  srsue); it now sleeps 50 ms when there is no new line.
 - Debug helpers: `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` runs srsue
   15 s with verbose logs; raw IQ via `hackrf_transfer` for offline PSS/CFO checks.
+- A fresh container's first srsue run takes >15 s to start (FFTW wisdom).
 
 ## Current work / plan
 
 1. ✅ HackRF receiving and decoding SIBs on B20.
 2. ✅ Band scanning with HackRF via sweep mode (`-S`).
-3. Auto-calibrate the HackRF ppm error (e.g. from the CFO srsue reports, or
-   from a known strong cell) instead of passing `-p` by hand.
-4. Test B8 / B3 (sweep sees B3 carriers; 15/20 MHz ones → srsue cannot decode).
-5. Speed up sweep mode (failed candidates cost the full srsue timeout).
-6. Further goals: to be defined with the user.
+3. ✅ Automatic ppm calibration (`-p auto`) and exact EARFCN/PCI via PSS/SSS.
+4. Test B3 end to end: 10 MHz carrier should decode; check what srsue does on
+   a 20 MHz carrier (needs 30.72 MSPS > HackRF max) — at least keep the MIB.
+5. Speed: tune `-t/-T` defaults, maybe stop once SIB1-5 are in.
+6. Update README (HackRF section, TX note).
+7. Further goals: to be defined with the user.

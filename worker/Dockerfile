@@ -11,6 +11,8 @@ RUN apt update && apt install -y --no-install-recommends \
     soapysdr-module-rtlsdr \
     uhd-soapysdr \
     uhd-host libuhd-dev \
+    # PSS/SSS search in vol/scripts/lte_pss.py
+    python3-numpy \
     # build deps
     git cmake libfftw3-dev libmbedtls-dev libboost-program-options-dev libconfig++-dev libsctp-dev \
     libzmq3-dev libboost-system-dev libboost-test-dev libboost-thread-dev \

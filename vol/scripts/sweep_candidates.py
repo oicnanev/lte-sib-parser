@@ -2,6 +2,8 @@
 # Find candidate LTE carriers in a band with hackrf_sweep.
 # Prints one line per detected carrier with the 3 EARFCNs (100 kHz raster) closest to
 # the estimated centre, best first: the estimate can be off by ~100 kHz.
+# With --refine the exact EARFCN is found with PSS/SSS (lte_pss.py) instead, and
+# carriers without LTE sync signals are dropped.
 # Replacement for cell_search on HackRF, where PSS search at 1.92 MSPS is unreliable.
 import argparse
 import math
@@ -23,8 +25,14 @@ parser.add_argument("-p", "--ppm", type=float, default=0.0,
                     help="frequency correction in ppm, same meaning as sib-scan.sh -p")
 parser.add_argument("-t", "--threshold", type=float, default=6.0, help="dB above noise floor")
 parser.add_argument("-d", "--database", default="/vol/helpers/lte_bands.sqlite3")
+parser.add_argument("--centres", action="store_true",
+                    help="only print carrier centres in Hz, strongest first")
+parser.add_argument("-r", "--refine", action="store_true",
+                    help="find the exact EARFCN and PCI with PSS/SSS (needs numpy and a right -p)")
 parser.add_argument("-v", "--verbose", action="store_true", help="print carriers to stderr")
 args = parser.parse_args()
+if args.refine:
+    import lte_pss
 
 conn = sqlite3.connect(args.database)
 row = conn.execute(
@@ -90,7 +98,7 @@ def crossing(a, b, level):
 
 
 ### refine edges at half level between noise and plateau, on the raw spectrum ###
-found = []
+carriers = []
 for i, j in runs:
     plateau = sorted(db[i:j + 1])[(j - i + 1) // 2]
     half = (plateau + noise) / 2
@@ -103,17 +111,42 @@ for i, j in runs:
     f_hi = crossing(hi, min(hi + 1, len(db) - 1), half)
     # the SDR reports a signal at f_true * (1 + ppm): undo it
     centre = (f_lo + f_hi) / 2 / (1 + args.ppm * 1e-6)
-    width = (f_hi - f_lo) / 1e6
-    bw = min(OCCUPIED, key=lambda b: abs(OCCUPIED[b] - width))
     pos = (centre / 1e6 - start_mhz) * 10  # fractional EARFCN offset
     earfcn = start_earfcn + round(pos)
-    if not start_mhz <= centre / 1e6 <= end_mhz or earfcn in found:
+    if not start_mhz <= centre / 1e6 <= end_mhz or earfcn in [c["earfcn"] for c in carriers]:
         continue
-    found.append(earfcn)
-    nearest = sorted(range(math.floor(pos) - 1, math.floor(pos) + 3), key=lambda n: abs(n - pos))[:3]
+    width = (f_hi - f_lo) / 1e6
+    carriers.append({
+        "centre": centre, "earfcn": earfcn, "snr": plateau - noise, "width": width,
+        "bw": min(OCCUPIED, key=lambda b: abs(OCCUPIED[b] - width)),
+        "nearest": [start_earfcn + n for n in
+                    sorted(range(math.floor(pos) - 1, math.floor(pos) + 3), key=lambda n: abs(n - pos))[:3]],
+    })
+
+if args.centres:
+    for c in sorted(carriers, key=lambda c: -c["snr"]):
+        print("%.0f" % c["centre"])
+    exit(0)
+
+for c in carriers:
+    line = " ".join(str(e) for e in c["nearest"])
+    note = ""
+    if args.refine:
+        # the true centre is on the 100 kHz raster; with the ppm error known, the
+        # residual offset measured on the PSS/SSS tells which raster point it is
+        tuned = (start_mhz + (c["earfcn"] - start_earfcn) / 10) * 1e6
+        r = lte_pss.measure(tuned, args.lna, args.vga)
+        if r["sss_score"] >= 0.4:
+            k = round((r["cfo_hz"] - tuned * args.ppm * 1e-6) / 1e5)
+            line = str(c["earfcn"] + k)
+            note = ", PCI %d (SSS %.2f)" % (r["pci"], r["sss_score"])
+        else:
+            # no LTE sync signals: GSM/NR/other, or too weak for srsue anyway
+            if args.verbose:
+                sys.stderr.write("carrier %.1f MHz width %.2f MHz %.1f dB above noise: no PSS/SSS lock, skipped\n"
+                                 % (c["centre"] / 1e6, c["width"], c["snr"]))
+            continue
     if args.verbose:
-        sys.stderr.write(
-            "carrier %.1f MHz width %.2f MHz (~%s MHz) %.1f dB above noise -> EARFCN %d\n"
-            % (centre / 1e6, width, bw, plateau - noise, earfcn)
-        )
-    print(" ".join(str(start_earfcn + n) for n in nearest))
+        sys.stderr.write("carrier %.1f MHz width %.2f MHz (~%s MHz) %.1f dB above noise -> %s%s\n"
+                         % (c["centre"] / 1e6, c["width"], c["bw"], c["snr"], line, note))
+    print(line)
