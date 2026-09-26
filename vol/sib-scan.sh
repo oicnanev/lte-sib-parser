@@ -6,6 +6,10 @@ show_help () {
   -d      device name (UHD,soapy,bladeRF)
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
+  -r      force srsue rf sample rate in Hz, srsue decimates in software
+          (recommended for HackRF: -r 15.36e6)
+  -o      srsue rf frequency offset in Hz, compensates SDR clock error
+          (e.g. HackRF at -20 ppm on 800 MHz: -o 16300)
   -b      lte band
   -s      start earfcn
   -e      end earfcn
@@ -67,6 +71,8 @@ database=/vol/output/cells.sqlite
 device_args=""
 device_name=""
 rx_gain="30"
+srate_args=()
+freq_offset="0"
 
 do_cellsearch=1
 no_requrse=0
@@ -74,7 +80,7 @@ no_requrse=0
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:d:t:T:h:d:q:nD:?" opt; do
+while getopts "s:e:b:a:d:g:r:o:t:T:hq:nD:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -85,6 +91,10 @@ while getopts "s:e:b:a:d:g:d:t:T:h:d:q:nD:?" opt; do
     a)  device_args=$OPTARG
       ;;
     g)  rx_gain=$OPTARG
+      ;;
+    r)  srate_args=(--rf.srate "$OPTARG")
+      ;;
+    o)  freq_offset=$OPTARG
       ;;
     b)  band=$OPTARG
       ;;
@@ -221,6 +231,8 @@ while true; do
                             --rf.device_name "$device_name" \
                             --rf.device_args "$device_args" \
                             --rf.rx_gain "$rx_gain" \
+                            "${srate_args[@]}" \
+                            --rf.freq_offset "$freq_offset" \
                             --rat.eutra.dl_earfcn "$earfcn" 1>/dev/null &
             pid=$(pidof srsue)
             # here we need to parse /tmp/ue.log to get SIB's from it
