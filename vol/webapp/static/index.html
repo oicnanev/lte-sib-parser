@@ -1,5 +1,9 @@
 <!doctype html>
 <html lang="en">
+<script>
+  // apply the saved theme before the page paints (no flash of the wrong theme)
+  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,6 +16,8 @@
   <h1>LTE SIB Scanner</h1>
   <span id="state" class="badge idle">idle</span>
   <span id="activity" class="activity"></span>
+  <span id="timer" class="timer" title="elapsed time of the run (current band)"></span>
+  <button type="button" id="theme" class="theme" title="colour theme: auto follows the system">Auto</button>
   <span id="conn" class="conn" title="live connection to the server"></span>
 </header>
 

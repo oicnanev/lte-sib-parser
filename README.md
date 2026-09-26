@@ -278,6 +278,11 @@ Open <http://localhost:8080>. It shows:
   clock ppm (`auto` or a number), timeouts, SIB5 neighbours; **Run** / **Stop**.
   The band can also be a preset or a custom list, see [Several bands](#several-bands).
 - **Activity**: current task and EARFCN, and the scan's live output.
+- **Stopwatch** in the header: elapsed time of the run and of the current band
+  while scanning, then `last run 13:46 (6 bands)`. The scan filter shows each
+  band's duration.
+- **Theme** button in the header: Auto (follows the system), Light or Dark;
+  the choice is kept in the browser. In dark mode the map tiles are darkened.
 - **Map**: your current position (with its accuracy) and one marker per place
   where readings were made, coloured by the best RSRP there; click it for the
   list of cells.
@@ -309,6 +314,10 @@ The bands are scanned one after another, in the order given, each as its own
   B20 (791–821 MHz). Carriers already read in an earlier band are passed to the
   next sweeps with `-x` and skipped, so a B20 cell is not read again as B28.
 - **Stop** ends the current band and the rest of the list.
+
+Bands cannot run in parallel on one SDR: a HackRF has a single tuner and a
+single USB stream, and only one program can open it at a time. Parallel bands
+would need one SDR per band.
 
 ### Location
 
@@ -559,6 +568,24 @@ Changes in this fork, newest last, with the reason for each.
 25. **Web page fits a phone screen**: the page never scrolls sideways (the
     readings table scrolls inside its card), so a scan can be followed from a
     phone's browser.
+26. **Faster PSS/SSS checks.** In a 13.8 min Portugal run, checking the
+    sweep's spectrum blocks took ~4–5 min: ~30 blocks, 1–2 captures each, ~3 s
+    of single-threaded CPU per capture. Now:
+    - one 90 ms capture per block, split into two independent 40 ms looks
+      (starting `hackrf_transfer` costs ~1 s, the signal only 40 ms);
+    - each look is analysed in a process pool on all CPU cores while the SDR
+      takes the next capture (the SDR itself stays sequential);
+    - correlations are zero-padded to FFT sizes with only factors 2, 3 and 5:
+      a 40 ms look gave 76928 = 2⁷ × 601 points, and the prime factor made each
+      FFT ~7× slower;
+    - the coarse offset search (121 offsets × 3 PSS) uses 20 ms; the fine search
+      and the SSS check use all 40 ms.
+    Measured: B3 sweep (19 blocks) 150 s → 32 s, B20 40 s → 15 s, same carriers,
+    EARFCNs and PCIs.
+27. **Stopwatch and theme** in the web app. The server reports when the run and
+    the current band started and when the run finished; the page counts from
+    those. The theme is stored in `localStorage` (a per-browser preference) and
+    applied before the page paints.
 
 ### Known limitations
 

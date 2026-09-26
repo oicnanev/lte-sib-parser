@@ -6,6 +6,7 @@
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
@@ -41,6 +42,23 @@ def capture(freq_hz, ms=40, lna=32, vga=20):
     return np.fft.ifft(X)[::DECIM]
 
 
+def fast_len(n):
+    """smallest 2^a 3^b 5^c >= n: FFTs of sizes with a large prime factor are
+    many times slower (76928 = 2^7 * 601 took 21 s instead of 3 s)"""
+    best = 1 << (n - 1).bit_length()
+    p5 = 1
+    while p5 < best:
+        p35 = p5
+        while p35 < best:
+            q = p35
+            while q < n:
+                q *= 2
+            best = min(best, q)
+            p35 *= 3
+        p5 *= 5
+    return best
+
+
 def pss_time(nid2):
     u = PSS_ROOTS[nid2]
     n = np.arange(62)
@@ -53,7 +71,7 @@ def pss_time(nid2):
 
 def _correlate(x, cfo, templates, t):
     """PSS correlation folded over 5 ms half-frames, per N_id_2"""
-    L = len(x) + N_FFT
+    L = fast_len(len(x) + N_FFT)
     X = np.fft.fft(x * np.exp(-2j * np.pi * cfo * t), L)
     half = int(FS_SEARCH * 0.005)
     out = []
@@ -70,21 +88,21 @@ def search(x, cfo_min=-150e3, cfo_max=150e3, step=2.5e3):
     correlation, ~5 for noise, 10+ for a real cell. cfo_hz is where the carrier
     appears relative to the tuned frequency, pos the PSS position mod 5 ms.
     """
-    t = np.arange(len(x)) / FS_SEARCH
-    templates = [np.fft.fft(np.conj(pss_time(k)[::-1]), len(x) + N_FFT) for k in range(3)]
-
-    def best_at(cfos):
+    def best_at(y, cfos):
+        t = np.arange(len(y)) / FS_SEARCH
+        templates = [np.fft.fft(np.conj(pss_time(k)[::-1]), fast_len(len(y) + N_FFT)) for k in range(3)]
         best = (0.0, 0, 0.0, 0)
         for cfo in cfos:
-            for k, folded in enumerate(_correlate(x, cfo, templates, t)):
+            for k, folded in enumerate(_correlate(y, cfo, templates, t)):
                 r = folded.max() / folded.mean()
                 if r > best[0]:
                     best = (r, k, cfo, int(folded.argmax()))
         return best
 
-    coarse = best_at(np.arange(cfo_min, cfo_max + step, step))
-    fine = best_at(np.arange(coarse[2] - step, coarse[2] + step, step / 10))
-    return fine if fine[0] >= coarse[0] else coarse
+    # the coarse grid (121 offsets x 3 PSS) is most of the CPU time: 20 ms (four
+    # PSS) is enough to find the offset; the fine search uses all the samples
+    coarse = best_at(x[: int(FS_SEARCH * 0.02)], np.arange(cfo_min, cfo_max + step, step))
+    return best_at(x, np.arange(coarse[2] - step, coarse[2] + step, step / 10))
 
 
 ### SSS (3GPP TS 36.211 6.11.2) ###
@@ -176,7 +194,7 @@ def detect(x, cfo_min=-150e3, cfo_max=150e3):
     """
     best = search(x, cfo_min, cfo_max)
     t = np.arange(len(x)) / FS_SEARCH
-    templates = [np.fft.fft(np.conj(pss_time(k)[::-1]), len(x) + N_FFT) for k in range(3)]
+    templates = [np.fft.fft(np.conj(pss_time(k)[::-1]), fast_len(len(x) + N_FFT)) for k in range(3)]
     result = None
     for m in (-2, -1, 0, 1, 2):
         cfo0 = best[2] + m * 15e3
@@ -193,6 +211,42 @@ def detect(x, cfo_min=-150e3, cfo_max=150e3):
     return result
 
 
+def _decide(first, second, strong, weak):
+    """lock rule, see measure()"""
+    if second is None:
+        return dict(first, locked=True)
+    best = max(first, second, key=lambda r: r["sss_score"])
+    locked = (best["sss_score"] >= strong or
+              (min(first["sss_score"], second["sss_score"]) >= weak and
+               abs(first["cfo_hz"] - second["cfo_hz"]) <= 2e3))
+    return dict(best, locked=locked)
+
+
+def measure_many(freqs_hz, lna=32, vga=20, strong=0.6, weak=0.25, workers=None):
+    """measure() for several frequencies, analysed on all CPU cores.
+
+    Each frequency gets one 90 ms capture, split into two independent 40 ms
+    looks after the tuning transient (starting hackrf_transfer costs ~1 s, the
+    signal only 40 ms). The SDR captures one frequency at a time; each capture's
+    PSS/SSS searches (~3 s of CPU each) go to a process pool at once and run in
+    parallel with the next captures.
+    """
+    with ProcessPoolExecutor(workers or os.cpu_count()) as pool:
+        jobs = []
+        for f in freqs_hz:
+            x = capture(f, ms=90, lna=lna, vga=vga)
+            half = len(x) // 2
+            jobs.append((pool.submit(detect, x[:half]), pool.submit(detect, x[half:])))
+        results = [(a.result(), b.result()) for a, b in jobs]
+    out = []
+    for first, second in results:
+        if first["sss_score"] >= strong:
+            out.append(_decide(first, None, strong, weak))
+        else:
+            out.append(_decide(first, second, strong, weak))
+    return out
+
+
 def measure(freq_hz, lna=32, vga=20, strong=0.6, weak=0.25):
     """capture + detect at freq_hz; returns the detect() dict plus "locked".
 
@@ -202,12 +256,4 @@ def measure(freq_hz, lna=32, vga=20, strong=0.6, weak=0.25):
     several cells (sectors) are often seen on one carrier. Gain is fixed: more
     gain only lets strong neighbouring carriers eat the 8-bit range.
     """
-    first = detect(capture(freq_hz, lna=lna, vga=vga))
-    if first["sss_score"] >= strong:
-        return dict(first, locked=True)
-    second = detect(capture(freq_hz, lna=lna, vga=vga))
-    best = max(first, second, key=lambda r: r["sss_score"])
-    locked = (best["sss_score"] >= strong or
-              (min(first["sss_score"], second["sss_score"]) >= weak and
-               abs(first["cfo_hz"] - second["cfo_hz"]) <= 2e3))
-    return dict(best, locked=locked)
+    return measure_many([freq_hz], lna, vga, strong, weak, workers=1)[0]

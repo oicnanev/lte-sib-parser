@@ -163,16 +163,20 @@ if args.centres:
     exit(0)
 
 printed = set()
+if args.refine:
+    # the true centre is on the 100 kHz raster; with the ppm error known, the
+    # residual offset measured on the PSS/SSS tells which raster point it is
+    for c in carriers:
+        c["tuned"] = (start_mhz + (c["earfcn"] - start_earfcn) / 10) * 1e6
+    for c, r in zip(carriers, lte_pss.measure_many([c["tuned"] for c in carriers], args.lna, args.vga)):
+        c["pss"] = r
 for c in carriers:
     line = " ".join(str(e) for e in c["nearest"])
     note = ""
     if args.refine:
-        # the true centre is on the 100 kHz raster; with the ppm error known, the
-        # residual offset measured on the PSS/SSS tells which raster point it is
-        tuned = (start_mhz + (c["earfcn"] - start_earfcn) / 10) * 1e6
-        r = lte_pss.measure(tuned, args.lna, args.vga)
+        r = c["pss"]
         if r["locked"]:
-            k = round((r["cfo_hz"] - tuned * args.ppm * 1e-6) / 1e5)
+            k = round((r["cfo_hz"] - c["tuned"] * args.ppm * 1e-6) / 1e5)
             line = str(c["earfcn"] + k)
             if line in printed:  # joined and separate blocks of the same carrier
                 continue

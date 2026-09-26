@@ -11,9 +11,25 @@
   --log-bg: #0f172a;
   --log-text: #cbd5e1;
   --row-hover: #eef2ff;
+  --map-filter: none;
+  color-scheme: light;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) { color-scheme: dark; } }
+/* dark theme: chosen explicitly, or "auto" (no data-theme) on a dark system */
+:root[data-theme="dark"] {
+  --bg: #0b0f17;
+  --card: #141a24;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --border: #273042;
+  --accent: #3b82f6;
+  --row-hover: #1e2738;
+  --log-bg: #080b11;
+  --map-filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #0b0f17;
     --card: #141a24;
     --text: #e5e7eb;
@@ -22,6 +38,7 @@
     --accent: #3b82f6;
     --row-hover: #1e2738;
     --log-bg: #080b11;
+    --map-filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9);
   }
 }
 
@@ -50,7 +67,9 @@ h2 { font-size: 14px; margin: 0 0 8px; text-transform: uppercase; letter-spacing
 .badge.idle { background: var(--border); color: var(--muted); }
 .badge.running { background: var(--ok); color: #fff; }
 .activity { color: var(--muted); font-family: ui-monospace, monospace; min-width: 0; overflow-wrap: anywhere; }
-.conn { margin-left: auto; width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
+.timer { font-family: ui-monospace, monospace; font-weight: 600; }
+.theme { flex: none; margin-left: auto; padding: 3px 10px; font-size: 12px; }
+.conn { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
 .conn.up { background: var(--ok); }
 
 main {
@@ -95,6 +114,8 @@ button.active { outline: 2px solid var(--accent); }
 
 #map { border-radius: 8px; border: 1px solid var(--border); min-height: 260px; }
 #map.picking { cursor: crosshair; }
+/* dark map: invert the OSM tiles only, not markers or popups */
+.leaflet-tile-pane { filter: var(--map-filter); }
 .table-card { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .table-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .table-head h2 { margin: 0; }

@@ -57,7 +57,8 @@ class Hub:
         self.proc = None
         self.status = {"running": False, "scan_id": None, "task": None, "earfcn": None,
                        "ppm": None, "band": None, "bands": [], "step": None,
-                       "started": None, "exit_code": None}
+                       "started": None, "band_started": None, "finished": None,
+                       "exit_code": None}
         self.stop_requested = False
         self.gps = None  # last gpsd fix
         self.client_loc = None  # browser or manual
@@ -288,7 +289,8 @@ def job_thread(steps, ppm):
         if done_mhz and "-S" in a:
             a += ["-x", " ".join("%.1f" % f for f in sorted(set(done_mhz)))]
         hub.set_status(step="%d/%d" % (i + 1, len(steps)) if len(steps) > 1 else None,
-                       band=band, scan_id=None, task="starting", earfcn=None)
+                       band=band, scan_id=None, task="starting", earfcn=None,
+                       band_started=readings_db.now())
         hub.add_log("[webapp] ./sib-scan.sh " + " ".join(a))
         proc = subprocess.Popen(["bash", SIB_SCAN] + a, cwd=VOL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -312,7 +314,8 @@ def job_thread(steps, ppm):
                 hub.add_log("[webapp] reusing %s ppm for the next bands" % ppm)
     if hub.stop_requested:
         hub.add_log("[webapp] stopped")
-    hub.set_status(running=False, task=None, earfcn=None, step=None, exit_code=code)
+    hub.set_status(running=False, task=None, earfcn=None, step=None, band_started=None,
+                   finished=readings_db.now(), exit_code=code)
 
 
 class BadRequest(Exception):
@@ -421,7 +424,8 @@ def start_scan(params):
         hub.log.clear()
     hub.stop_requested = False
     hub.set_status(running=True, scan_id=None, task="starting", earfcn=None, ppm=None,
-                   band=None, step=None, started=readings_db.now(), exit_code=None,
+                   band=None, step=None, started=readings_db.now(), band_started=None,
+                   finished=None, exit_code=None,
                    bands=[b for b, _ in steps if b is not None])
     threading.Thread(target=job_thread, args=(steps, ppm), daemon=True).start()
 

@@ -162,4 +162,11 @@ cannot be tested end-to-end without it.
     2026-09-26 (`lte-sib-parser-webapp.service`, enabled, docker enabled);
     after code changes: `sudo systemctl restart lte-sib-parser-webapp`.
     Boot autostart confirmed after a reboot on 2026-09-26 (up 13 s after boot).
-11. Further goals: to be defined with the user.
+11. ✅ Web app: Auto/Light/Dark theme, stopwatch (run + band, last run), scan
+    durations. PSS/SSS checks parallel (ProcessPool, 8 cores), one 90 ms
+    capture split in two, FFT sizes 5-smooth (`fast_len`), coarse search on
+    20 ms → B3 sweep 150 s → 32 s. One HackRF cannot scan bands in parallel.
+12. Proposed, not done: skip srsue on carriers the SDR can't follow (HackRF:
+    15/20 MHz; ~40 s each, always fails) and save them as detection-only
+    readings (freq, width, PCI) — waiting for the user's decision.
+13. Further goals: to be defined with the user.

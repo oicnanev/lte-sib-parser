@@ -34,9 +34,8 @@ if not centres:
     exit(1)
 
 ppms = []
-for f in centres[: args.max_carriers]:
-    tuned = round(f / 1e5) * 1e5  # nearest raster point
-    r = lte_pss.measure(tuned, args.lna, args.vga)
+tuned_list = [round(f / 1e5) * 1e5 for f in centres[: args.max_carriers]]  # nearest raster points
+for tuned, r in zip(tuned_list, lte_pss.measure_many(tuned_list, args.lna, args.vga)):
     if not r["locked"]:
         sys.stderr.write("%.1f MHz: no cell (SSS score %.2f)\n" % (tuned / 1e6, r["sss_score"]))
         continue

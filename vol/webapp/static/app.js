@@ -11,6 +11,47 @@ let picking = false;
 let geoWatch = null;
 let lastSentGeo = null;
 
+// ---------- theme ----------
+
+const THEMES = ["auto", "light", "dark"];
+function applyTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  $("#theme").textContent = t[0].toUpperCase() + t.slice(1);
+  try { if (t === "auto") localStorage.removeItem("theme"); else localStorage.setItem("theme", t); } catch (e) {}
+}
+applyTheme(document.documentElement.dataset.theme || "auto");
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || "auto";
+  applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
+};
+
+// ---------- stopwatch ----------
+
+function hms(seconds) {
+  seconds = Math.max(0, Math.round(seconds));
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+function tick() {
+  const el = $("#timer");
+  const st = status;
+  if (st.running && st.started) {
+    const total = (Date.now() - Date.parse(st.started)) / 1000;
+    const band = st.band_started && st.step ? ` (B${st.band} ${hms((Date.now() - Date.parse(st.band_started)) / 1000)})` : "";
+    el.textContent = `⏱ ${hms(total)}${band}`;
+  } else if (st.started && st.finished) {
+    const n = (st.bands || []).length;
+    el.textContent = `last run ${hms((Date.parse(st.finished) - Date.parse(st.started)) / 1000)}` +
+      (n > 1 ? ` (${n} bands)` : "");
+  } else {
+    el.textContent = "";
+  }
+}
+setInterval(tick, 1000);
+
 // ---------- API ----------
 
 async function api(path, body) {
@@ -198,7 +239,9 @@ async function loadScans() {
   const cur = sel.value;
   sel.innerHTML = '<option value="">all</option>' + scans.map((s) =>
     `<option value="${s.id}">#${s.id} ${esc(new Date(s.started).toLocaleString())}` +
-    `${s.band ? " B" + esc(s.band) : ""} (${s.readings})</option>`).join("");
+    `${s.band ? " B" + esc(s.band) : ""} · ${s.readings} reading(s)` +
+    `${s.finished ? " · " + hms((Date.parse(s.finished) - Date.parse(s.started)) / 1000) : " · running"}` +
+    `</option>`).join("");
   sel.value = cur;
 }
 
@@ -252,6 +295,7 @@ $("#stop").onclick = () => api("/api/stop", {}).catch((e) => ($("#form-error").t
 
 function showStatus(st) {
   status = st;
+  tick();
   const b = $("#state");
   b.textContent = st.running ? "running" : "idle";
   b.className = "badge " + (st.running ? "running" : "idle");
