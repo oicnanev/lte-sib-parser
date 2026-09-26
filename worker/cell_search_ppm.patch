@@ -1,0 +1,46 @@
+--- a/lib/examples/cell_search.c
++++ b/lib/examples/cell_search.c
+@@ -63,6 +63,7 @@
+ };
+ 
+ float rf_gain = 70.0;
++float rf_ppm  = 0.0;
+ char* rf_args = "";
+ char* rf_dev  = "";
+ 
+@@ -72,6 +73,7 @@
+   printf("\t-a RF args [Default %s]\n", rf_args);
+   printf("\t-d RF devicename [Default %s]\n", rf_dev);
+   printf("\t-g RF gain [Default %.2f dB]\n", rf_gain);
++  printf("\t-p RF frequency correction in ppm, positive tunes higher [Default %.1f]\n", rf_ppm);
+   printf("\t-s earfcn_start [Default All]\n");
+   printf("\t-e earfcn_end [Default All]\n");
+   printf("\t-n nof_frames_total [Default 100]\n");
+@@ -81,7 +83,7 @@
+ void parse_args(int argc, char** argv)
+ {
+   int opt;
+-  while ((opt = getopt(argc, argv, "agsendvb")) != -1) {
++  while ((opt = getopt(argc, argv, "agsendvbp")) != -1) {
+     switch (opt) {
+       case 'a':
+         rf_args = argv[optind];
+@@ -104,6 +106,9 @@
+       case 'g':
+         rf_gain = strtof(argv[optind], NULL);
+         break;
++      case 'p':
++        rf_ppm = strtof(argv[optind], NULL);
++        break;
+       case 'v':
+         increase_srsran_verbose_level();
+         break;
+@@ -204,7 +209,7 @@
+ 
+   for (freq = 0; freq < nof_freqs && !go_exit; freq++) {
+     /* set rf_freq */
+-    srsran_rf_set_rx_freq(&rf, 0, (double)channels[freq].fd * MHZ);
++    srsran_rf_set_rx_freq(&rf, 0, (double)channels[freq].fd * MHZ * (1.0 + rf_ppm * 1e-6));
+     INFO("Set rf_freq to %.3f MHz", (double)channels[freq].fd * MHZ / 1000000);
+ 
+     printf(

@@ -28,14 +28,15 @@ RUN git clone https://github.com/srsran/srsRAN_4G
 
 #COPY ./srsRAN_4G /srsRAN_4G
 
-COPY sib_logger.patch rx_only.patch /srsRAN_4G/
+COPY sib_logger.patch rx_only.patch cell_search_ppm.patch /srsRAN_4G/
 
 WORKDIR /srsRAN_4G/
 
 # origin/master at 2024.12.25
 # rx_only.patch: srsue never transmits and never retunes the LO for TX
 # (required for half-duplex SDRs like HackRF, which share one LO)
-RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && git apply sib_logger.patch rx_only.patch && \
+# cell_search_ppm.patch: adds -p <ppm> frequency correction to cell_search
+RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && git apply sib_logger.patch rx_only.patch cell_search_ppm.patch && \
     mkdir build && cd build && \
     cmake -DUSE_LTE_RATES=ON ../ && make -j`nproc` cell_search srsue && make install && \
     ldconfig
