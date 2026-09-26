@@ -556,6 +556,9 @@ Changes in this fork, newest last, with the reason for each.
     stopped/disabled like any service. `--no-build`, because building srsRAN at
     boot would take many minutes; the install script refuses to install
     without the image.
+25. **Web page fits a phone screen**: the page never scrolls sideways (the
+    readings table scrolls inside its card), so a scan can be followed from a
+    phone's browser.
 
 ### Known limitations
 
