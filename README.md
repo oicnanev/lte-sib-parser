@@ -190,6 +190,9 @@ usage: sib-scan.sh [OPTION]...
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
           only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
+  -w      with -S: also run srsue on carriers >= 16 MHz wide (20 MHz cells).
+          By default they are saved as detection-only readings (PCI and
+          bandwidth, no SIBs): a HackRF (20 MSPS) cannot decode them
   -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
           (carriers already read in an overlapping band)
   -q      use explict list of earfcn's (avoid cell_search)
@@ -286,8 +289,9 @@ Open <http://localhost:8080>. It shows:
 - **Map**: your current position (with its accuracy) and one marker per place
   where readings were made, coloured by the best RSRP there; click it for the
   list of cells.
-- **Readings table**: time, band, downlink frequency, EARFCN, PCI, CGI, PLMNs,
-  TAC, eNB ID, cell ID, RSRP, decoded SIBs and location, updated live; filter by scan; click a row
+- **Readings table**: time, band, downlink frequency, bandwidth, EARFCN, PCI,
+  CGI, PLMNs, TAC, eNB ID, cell ID, RSRP, decoded SIBs (or *detected only*) and
+  location, updated live; filter by scan; click a row
   for every field and the full MIB/SIB contents.
 
 Only one scan runs at a time (the SDR can't be shared). The server is
@@ -389,8 +393,15 @@ Table `readings`:
 | `eci`, `enb_id`, `cell_id` | 28-bit E-UTRAN cell identity, split into eNB ID (`eci >> 8`) and cell ID (`eci & 0xff`) |
 | `cgi` | cell global identity `MCC-MNC-ECI`, as phones show it (e.g. `268-02-26040502`) |
 | `rsrp` | reference signal received power, dBm |
+| `bandwidth_mhz` | channel bandwidth: from the MIB when decoded, else estimated by the sweep |
+| `detection` | `srsue` (decoded) or `pss` (found by its sync signals only, see below) |
 | `lat`, `lon`, `accuracy_m`, `location_source`, `location_time` | position of the reading (see [Location](#location)) |
 | `mib`, `sib1` … `sib13` | decoded messages as JSON, as in `cells.sqlite` |
+
+A `pss` reading is a carrier the sweep found and identified (EARFCN, PCI,
+bandwidth, location) but did not decode, because the SDR cannot follow it: with
+a HackRF, 20 MHz cells. It has no RSRP, CGI or SIBs. Columns added later
+(`bandwidth_mhz`, `detection`) are added to older databases automatically.
 
 ```bash
 sqlite3 vol/output/readings.sqlite "SELECT time, earfcn, pci, cgi, rsrp, lat, lon FROM readings"
@@ -586,10 +597,21 @@ Changes in this fork, newest last, with the reason for each.
     the current band started and when the run finished; the page counts from
     those. The theme is stored in `localStorage` (a per-browser preference) and
     applied before the page paints.
+28. **Carriers too wide for the SDR are recorded, not decoded** (`-S`, default;
+    `-w` to disable). On a HackRF, srsue always failed on 20 MHz carriers
+    (30.72 MSPS > 20 MSPS) after waiting the full `-t` timeout plus start-up,
+    ~40 s each, ~1.5 min per Portugal run. Carriers whose sweep block is
+    ≥ 16 MHz wide are now saved at once as `detection = 'pss'` readings with
+    EARFCN, PCI (from PSS/SSS), estimated bandwidth and location. The limit is
+    16 MHz, not 15 MHz-class widths, because a B8 block measured 14.7 MHz wide
+    was decoded by srsue on the HackRF. Every reading also gets
+    `bandwidth_mhz` (exact from the MIB when decoded), shown as the web app's
+    BW column; detected carriers count as already read for overlapping bands.
+    Measured: B1 7 s instead of ~80 s.
 
 ### Known limitations
 
-- 15/20 MHz cells on a HackRF: no SIBs; the MIB is decoded only sometimes.
+- 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
 - `cell_search` with a HackRF remains unreliable; use `-S`.
 - `-p auto` needs LTE cells on the chosen band, and calibration on bands
   above ~1.5 GHz is ambiguous for clocks more than ~25 ppm off.
@@ -600,6 +622,8 @@ Changes in this fork, newest last, with the reason for each.
   an empty scan in `readings.sqlite`.
 - A reading's band comes from its EARFCN; the band a cell announces in SIB1
   (`freqBandIndicator`) is not checked.
+- A sweep sometimes misses a lightly loaded carrier that other sweeps find
+  (seen once for a 20 MHz B3 carrier); scanning the band again picks it up.
 - The Portugal preset's band list is based on the bands Portuguese operators
   hold; bands without LTE cells just cost a calibration/sweep (~30 s).
 

@@ -166,7 +166,8 @@ cannot be tested end-to-end without it.
     durations. PSS/SSS checks parallel (ProcessPool, 8 cores), one 90 ms
     capture split in two, FFT sizes 5-smooth (`fast_len`), coarse search on
     20 ms → B3 sweep 150 s → 32 s. One HackRF cannot scan bands in parallel.
-12. Proposed, not done: skip srsue on carriers the SDR can't follow (HackRF:
-    15/20 MHz; ~40 s each, always fails) and save them as detection-only
-    readings (freq, width, PCI) — waiting for the user's decision.
+12. ✅ Carriers ≥16 MHz wide (sweep) are saved as detection-only readings
+    (`detection='pss'`, PCI, bandwidth, location) instead of running srsue
+    (`sib-scan.sh -w` to disable). New columns `bandwidth_mhz`, `detection`,
+    migrated automatically. B1: 7 s instead of ~80 s.
 13. Further goals: to be defined with the user.

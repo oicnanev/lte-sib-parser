@@ -285,7 +285,9 @@ while True:
             timeout = time.time() + timeout_add
             if database:
                 write_db(database, earfcn, "mib", json.dumps(mib))
-            reading.set(mib=json.dumps(mib), **pci_field(stdout_file))
+            reading.set(mib=json.dumps(mib),
+                        bandwidth_mhz=readings_db.MIB_BANDWIDTH.get(mib.get("dl-Bandwidth")),
+                        **pci_field(stdout_file))
 
         # sib
         if "BCCH-DL-SCH-Message" in msg:

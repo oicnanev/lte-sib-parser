@@ -175,7 +175,7 @@ def gps_staleness_thread():
 # --- readings database ---
 
 SUMMARY_COLS = ("id, scan_id, time, updated, earfcn, band, dl_freq_mhz, pci, mcc, mnc, plmns, "
-                "tac, eci, enb_id, cell_id, cgi, rsrp, lat, lon, accuracy_m, location_source, "
+                "tac, eci, enb_id, cell_id, cgi, rsrp, bandwidth_mhz, detection, lat, lon, accuracy_m, location_source, "
                 "location_time, mib IS NOT NULL AS has_mib, "
                 + ", ".join("%s IS NOT NULL AS has_%s" % (s, s) for s in readings_db.SIBS))
 
@@ -302,7 +302,8 @@ def job_thread(steps, ppm):
         if sid:
             with db() as conn:
                 done_mhz += [r[0] for r in conn.execute(
-                    "SELECT dl_freq_mhz FROM readings WHERE scan_id = ? AND mib IS NOT NULL", (sid,))
+                    "SELECT dl_freq_mhz FROM readings WHERE scan_id = ? "
+                    "AND (mib IS NOT NULL OR detection = 'pss')", (sid,))
                     if r[0] is not None]
         hub.add_log("[webapp] band %s finished (exit code %s)" % (band, code) if band
                     else "[webapp] scan finished (exit code %s)" % code)

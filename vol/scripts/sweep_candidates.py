@@ -12,6 +12,9 @@ import subprocess
 import sys
 
 BIN_HZ = 25000
+# a 20 MHz cell occupies 18 MHz; the widest block seen for a 15 MHz-class
+# carrier that srsue still decoded on a HackRF was 14.7 MHz
+WIDE_MHZ = 16
 MARGIN_MHZ = 5
 MERGE_GAP_HZ = 0.5e6
 # occupied bandwidth (MHz) of the standard LTE channel bandwidths
@@ -30,6 +33,12 @@ parser.add_argument("--centres", action="store_true",
                     help="only print carrier centres in Hz, whole carriers and strongest first")
 parser.add_argument("-r", "--refine", action="store_true",
                     help="find the exact EARFCN and PCI with PSS/SSS (needs numpy and a right -p)")
+parser.add_argument("--skip-wide", action="store_true",
+                    help="with --refine: carriers >= 16 MHz wide (20 MHz cells, beyond a HackRF's "
+                         "20 MSPS) are saved as detection-only readings instead of printed for srsue")
+parser.add_argument("--readings-db", help="readings database for --skip-wide detections")
+parser.add_argument("--scan-id", type=int, help="scan id for --skip-wide detections")
+parser.add_argument("--location-file", help="location file (see location.py)")
 parser.add_argument("-x", "--exclude", default="",
                     help="DL frequencies in MHz to skip (carriers already read in an overlapping band)")
 parser.add_argument("-v", "--verbose", action="store_true", help="print carriers to stderr")
@@ -162,6 +171,23 @@ if args.centres:
         print("%.0f" % c["centre"])
     exit(0)
 
+
+
+def record_detection(earfcn, pci, bw):
+    """detection-only reading: carrier found by PSS/SSS, not decoded"""
+    if not args.readings_db:
+        return
+    import location
+    import readings_db
+    conn = readings_db.connect(args.readings_db)
+    freq = round(start_mhz + (earfcn - start_earfcn) / 10, 1)
+    loc = location.current(args.location_file) if args.location_file else location.current()
+    rid = readings_db.create_reading(conn, args.scan_id, earfcn, str(args.band), freq, loc,
+                                     detection="pss")
+    readings_db.update_reading(conn, rid, pci=pci, bandwidth_mhz=bw)
+    conn.close()
+
+
 printed = set()
 if args.refine:
     # the true centre is on the 100 kHz raster; with the ppm error known, the
@@ -181,6 +207,14 @@ for c in carriers:
             if line in printed:  # joined and separate blocks of the same carrier
                 continue
             note = ", PCI %d (SSS %.2f)" % (r["pci"], r["sss_score"])
+            if args.skip_wide and c["width"] >= WIDE_MHZ:
+                printed.add(line)
+                record_detection(int(line), r["pci"], c["bw"])
+                if args.verbose:
+                    sys.stderr.write("carrier %.1f MHz width %.2f MHz (~%s MHz) %.1f dB above noise -> %s%s: "
+                                     "too wide for srsue on this SDR, saved as detected only\n"
+                                     % (c["centre"] / 1e6, c["width"], c["bw"], c["snr"], line, note))
+                continue
         else:
             # no LTE sync signals: GSM/NR/other, or too weak for srsue anyway
             if args.verbose:

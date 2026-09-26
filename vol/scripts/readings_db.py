@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS readings (
     cell_id INTEGER,                -- eci & 0xff
     cgi TEXT,                       -- MCC-MNC-ECI of the first PLMN
     rsrp REAL,                      -- dBm
+    bandwidth_mhz REAL,             -- from the MIB, or estimated by the sweep
+    detection TEXT,                 -- srsue (decoded) or pss (sync signals only)
     lat REAL,
     lon REAL,
     accuracy_m REAL,
@@ -58,9 +60,21 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# columns added after the first release: added to older databases on connect
+MIGRATIONS = [("readings", "bandwidth_mhz", "REAL"), ("readings", "detection", "TEXT")]
+
+# MIB dl-Bandwidth -> channel bandwidth in MHz
+MIB_BANDWIDTH = {"n6": 1.4, "n15": 3, "n25": 5, "n50": 10, "n75": 15, "n100": 20}
+
+
 def connect(path):
     conn = sqlite3.connect(path, timeout=10)
     conn.executescript(SCHEMA)
+    for table, col, typ in MIGRATIONS:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % table)]
+        if col not in cols:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
+    conn.commit()
     return conn
 
 
@@ -105,15 +119,16 @@ def sib1_identity(sib1):
     }
 
 
-def create_reading(conn, scan_id, earfcn, band=None, dl_freq_mhz=None, location=None):
+def create_reading(conn, scan_id, earfcn, band=None, dl_freq_mhz=None, location=None,
+                   detection="srsue"):
     t = now()
     loc = location or {}
     cur = conn.execute(
         """INSERT INTO readings (scan_id, time, updated, earfcn, band, dl_freq_mhz,
-               lat, lon, accuracy_m, location_source, location_time)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               lat, lon, accuracy_m, location_source, location_time, detection)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (scan_id, t, t, earfcn, band, dl_freq_mhz, loc.get("lat"), loc.get("lon"),
-         loc.get("accuracy"), loc.get("source"), loc.get("time")),
+         loc.get("accuracy"), loc.get("source"), loc.get("time"), detection),
     )
     conn.commit()
     return cur.lastrowid

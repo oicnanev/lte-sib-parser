@@ -105,7 +105,8 @@ function drawReadings() {
     });
     const rows = list.map((r) =>
       `<tr><td>B${esc(r.band)}</td><td>${esc(r.dl_freq_mhz ?? "")} MHz</td><td>${esc(r.earfcn)}</td><td>PCI ${esc(r.pci ?? "?")}</td>` +
-      `<td>${esc(r.cgi ?? "")}</td><td>${r.rsrp != null ? esc(r.rsrp) + " dBm" : ""}</td></tr>`).join("");
+      `<td>${esc(r.cgi ?? (r.detection === "pss" ? "detected only" : ""))}</td>` +
+      `<td>${r.rsrp != null ? esc(r.rsrp) + " dBm" : ""}</td></tr>`).join("");
     m.bindPopup(`<b>${list.length} reading(s)</b><br>${esc(list[0].location_source ?? "")}` +
       (list[0].accuracy_m ? ` ±${Math.round(list[0].accuracy_m)} m` : "") +
       `<table>${rows}</table>`);
@@ -212,11 +213,12 @@ function filteredReadings() {
 function renderTable(freshId) {
   const rows = filteredReadings().map((r) => {
     const loc = r.lat != null ? `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)} (${esc(r.location_source)})` : "";
-    const sibs = (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
+    const sibs = r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
     const time = new Date(r.time).toLocaleString();
     return `<tr data-id="${r.id}"${r.id === freshId ? ' class="fresh"' : ""}>` +
       `<td>${esc(time)}</td><td>${esc(r.band)}</td>` +
-      `<td>${r.dl_freq_mhz != null ? esc(r.dl_freq_mhz) + " MHz" : ""}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
+      `<td>${r.dl_freq_mhz != null ? esc(r.dl_freq_mhz) + " MHz" : ""}</td>` +
+      `<td>${r.bandwidth_mhz != null ? esc(r.bandwidth_mhz) + " MHz" : ""}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
       `<td>${esc(r.cgi ?? "")}</td><td>${esc(r.plmns ?? "")}</td><td>${esc(r.tac ?? "")}</td>` +
       `<td>${esc(r.enb_id ?? "")}</td><td>${esc(r.cell_id ?? "")}</td>` +
       `<td class="rsrp" style="color:${rsrpColor(r.rsrp)}">${r.rsrp != null ? esc(r.rsrp) : ""}</td>` +
@@ -247,12 +249,15 @@ async function loadScans() {
 
 async function showDetail(id) {
   const r = await api(`/api/readings/${id}`);
-  $("#detail-title").textContent = `EARFCN ${r.earfcn} · PCI ${r.pci ?? "?"} · ${r.cgi ?? "no SIB1"}`;
+  $("#detail-title").textContent = `EARFCN ${r.earfcn} · PCI ${r.pci ?? "?"} · ` +
+    (r.cgi ?? (r.detection === "pss" ? "detected only" : "no SIB1"));
   const fields = [
     ["Time", r.time], ["Updated", r.updated], ["Scan", r.scan_id], ["Band", r.band],
     ["DL frequency", r.dl_freq_mhz != null ? r.dl_freq_mhz + " MHz" : ""],
     ["PLMNs", r.plmns], ["TAC", r.tac], ["ECI", r.eci], ["eNB ID", r.enb_id], ["Cell ID", r.cell_id],
     ["RSRP", r.rsrp != null ? r.rsrp + " dBm" : ""],
+    ["Bandwidth", r.bandwidth_mhz != null ? r.bandwidth_mhz + " MHz" : ""],
+    ["Detection", r.detection === "pss" ? "PSS/SSS only (not decoded: too wide for this SDR)" : "decoded by srsue"],
     ["Location", r.lat != null ? `${r.lat}, ${r.lon}` : ""],
     ["Accuracy", r.accuracy_m != null ? Math.round(r.accuracy_m) + " m" : ""],
     ["Location source", r.location_source], ["Location time", r.location_time],
