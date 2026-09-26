@@ -13,6 +13,7 @@ import sys
 
 BIN_HZ = 25000
 MARGIN_MHZ = 5
+MERGE_GAP_HZ = 0.5e6
 # occupied bandwidth (MHz) of the standard LTE channel bandwidths
 OCCUPIED = {1.4: 1.08, 3: 2.7, 5: 4.5, 10: 9.0, 15: 13.5, 20: 18.0}
 
@@ -26,7 +27,7 @@ parser.add_argument("-p", "--ppm", type=float, default=0.0,
 parser.add_argument("-t", "--threshold", type=float, default=6.0, help="dB above noise floor")
 parser.add_argument("-d", "--database", default="/vol/helpers/lte_bands.sqlite3")
 parser.add_argument("--centres", action="store_true",
-                    help="only print carrier centres in Hz, strongest first")
+                    help="only print carrier centres in Hz, whole carriers and strongest first")
 parser.add_argument("-r", "--refine", action="store_true",
                     help="find the exact EARFCN and PCI with PSS/SSS (needs numpy and a right -p)")
 parser.add_argument("-v", "--verbose", action="store_true", help="print carriers to stderr")
@@ -84,11 +85,20 @@ while i < len(smooth):
         j = i
         while j + 1 < len(smooth) and smooth[j + 1] > noise + args.threshold:
             j += 1
-        if (j - i + 1) * BIN_HZ >= 1e6:
-            runs.append((i, j))
+        runs.append((i, j))
         i = j + 1
     else:
         i += 1
+
+# a lightly loaded cell has holes in its spectrum (no data scheduled there):
+# join blocks closer than the smallest guard between adjacent LTE carriers
+merged = []
+for i, j in runs:
+    if merged and (i - merged[-1][1]) * BIN_HZ < MERGE_GAP_HZ:
+        merged[-1] = (merged[-1][0], j)
+    else:
+        merged.append((i, j))
+runs = [(i, j) for i, j in merged if (j - i + 1) * BIN_HZ >= 1e6]
 
 
 def crossing(a, b, level):
@@ -124,7 +134,10 @@ for i, j in runs:
     })
 
 if args.centres:
-    for c in sorted(carriers, key=lambda c: -c["snr"]):
+    # whole carriers first (width matches a standard LTE bandwidth), then by strength
+    def clean(c):
+        return abs(OCCUPIED[c["bw"]] - c["width"]) < 0.4
+    for c in sorted(carriers, key=lambda c: (not clean(c), -c["snr"])):
         print("%.0f" % c["centre"])
     exit(0)
 
