@@ -170,4 +170,10 @@ cannot be tested end-to-end without it.
     (`detection='pss'`, PCI, bandwidth, location) instead of running srsue
     (`sib-scan.sh -w` to disable). New columns `bandwidth_mhz`, `detection`,
     migrated automatically. B1: 7 s instead of ~80 s.
-13. Further goals: to be defined with the user.
+13. ✅ Known-EARFCN mode: `sib-scan.sh -K list -W wide -G gain_high`,
+    `scripts/check_earfcns.py` (PSS/SSS on exact EARFCNs, measures ppm too),
+    SIB5 neighbours checked during the run. Seed list
+    `vol/helpers/earfcns/portugal.txt` (from SIB5, one location) + everything
+    in readings DB. Web preset "Portugal (known EARFCNs, fast)". 19 EARFCNs
+    checked in 64 s; found EARFCN 1300 that the sweep never did.
+14. Further goals: to be defined with the user.

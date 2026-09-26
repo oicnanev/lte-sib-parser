@@ -22,6 +22,8 @@ change is listed in
 
 1. **Find a cell**
    - default: `cell_search` walks the band EARFCN by EARFCN until it finds a cell;
+   - `-K "e1 e2 …"` (HackRF): a list of known EARFCNs is checked for cells with
+     PSS/SSS, and EARFCNs advertised in SIB5 are added (see [Known EARFCNs](#known-earfcns));
    - `-S` (HackRF): `hackrf_sweep` measures the whole band, LTE carriers are
      found in the spectrum and their exact EARFCN is confirmed with PSS/SSS;
    - `-q "e1 e2 …"`: an explicit list of EARFCNs.
@@ -179,6 +181,7 @@ usage: sib-scan.sh [OPTION]...
   -d      device name (UHD,soapy,bladeRF)
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
+  -G      rx gain for EARFCNs at 1 GHz and above (default: same as -g)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (the ratio to the cell's sample rate must be an integer)
   -p      frequency correction in ppm for SDR clock error, positive
@@ -195,6 +198,12 @@ usage: sib-scan.sh [OPTION]...
           bandwidth, no SIBs): a HackRF (20 MSPS) cannot decode them
   -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
           (carriers already read in an overlapping band)
+  -K      check a list of known EARFCNs for cells with PSS/SSS (HackRF,
+          numpy), then run srsue only where there is one. EARFCNs advertised
+          in SIB5 by the cells decoded are checked too. With -p auto the
+          clock is measured in the same pass. Example: -K "6200 1875 2800"
+  -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
+          a HackRF): saved as detection-only readings, no srsue
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q "1300 1301 1302 1303"
   -n      no reqursive scan, do no scan cells from sib5
@@ -298,10 +307,42 @@ Only one scan runs at a time (the SDR can't be shared). The server is
 `vol/webapp/server.py`, Python standard library only; live updates use
 Server-Sent Events.
 
+### Known EARFCNs
+
+The preset **Portugal (known EARFCNs, fast)** skips the band sweeps. It checks
+a list of EARFCNs for cells and runs srsue only where it finds one:
+
+1. The list is `vol/helpers/earfcns/portugal.txt` plus every EARFCN in the
+   readings database, read directly or advertised in any cell's SIB5, from any
+   earlier scan anywhere. It grows with every run.
+2. Each EARFCN gets a PSS/SSS check (~1 s of capture each, analysed in
+   parallel). Since the EARFCN is exact, the offset measured on each cell is
+   the clock error, so `ppm auto` is measured in the same pass on any band.
+3. srsue runs on the EARFCNs with a cell, using *Gain* below 1 GHz and
+   *Gain ≥ 1 GHz* above. EARFCNs known to be 20 MHz wide (from an earlier MIB
+   or sweep) are saved as detected only.
+4. EARFCNs that the decoded cells advertise in SIB5 and that were not checked
+   yet are checked and read before the run ends, so in a new area the local
+   cells extend the list.
+
+**The list is not complete and cannot be.** A cell's SIB5 lists the
+frequencies its operator uses *in that area*; other areas may use other
+carriers (the list already has two B8 carriers 1 MHz apart, 3475 and 3485,
+which cannot both be in use at one place), an operator never decoded
+contributes nothing, and operators refarm spectrum over time. Run the
+**Portugal sweep** preset now and then, or in a new region, to find carriers
+nobody advertised; its readings then join the list.
+
+From the command line:
+```bash
+./sib-scan.sh -K "$(grep -o '^[0-9]*' helpers/earfcns/portugal.txt)" -W "500 1700" \
+    -p auto -d soapy -a "driver=hackrf" -g 56 -G 70
+```
+
 ### Several bands
 
 The **Band** list starts with presets and ends with **Custom list…** (e.g.
-`20 3 7`). The preset **Portugal: B20, B8, B28, B3, B1, B7** covers the FDD bands
+`20 3 7`). The preset **Portugal sweep: B20, B8, B28, B3, B1, B7** covers the FDD bands
 Portuguese operators use for LTE; B38 (TDD) is left out because the PSS/SSS
 detector assumes FDD.
 
@@ -604,10 +645,26 @@ Changes in this fork, newest last, with the reason for each.
     ≥ 16 MHz wide are now saved at once as `detection = 'pss'` readings with
     EARFCN, PCI (from PSS/SSS), estimated bandwidth and location. The limit is
     16 MHz, not 15 MHz-class widths, because a B8 block measured 14.7 MHz wide
-    was decoded by srsue on the HackRF. Every reading also gets
+    was decoded by srsue on the HackRF (its MIB later showed a 5 MHz cell: the
+    sweep had joined it with a neighbouring signal). Every reading also gets
     `bandwidth_mhz` (exact from the MIB when decoded), shown as the web app's
     BW column; detected carriers count as already read for overlapping bands.
     Measured: B1 7 s instead of ~80 s.
+29. **Known-EARFCN mode** (`-K`, preset "Portugal (known EARFCNs, fast)").
+    In the timed Portugal sweep (7:18) most of the time outside srsue went to
+    sweeping and checking spectrum blocks, and the sweep still missed carriers:
+    a weak B3 carrier at 1815 MHz (EARFCN 1300) looked like fragments and was
+    never found, and the B8 carrier at 942.5 MHz was missed in one run. Cells
+    advertise their operator's other carriers in SIB5, which gives a list of
+    exact EARFCNs; checking each with PSS/SSS found both carriers and took 64 s
+    for 19 EARFCNs, calibration included. A full run with this preset took
+    5:29 instead of 7:18. Running srsue directly on the list
+    was rejected: an EARFCN without a cell costs the full `-t` timeout plus
+    start-up (~40 s), and about half the list has no cell at any one place.
+    The list is seeded from a file and grows from the readings database and
+    from SIB5 during the run, because no list is complete (see
+    [Known EARFCNs](#known-earfcns)). `-G` sets the gain for EARFCNs above
+    1 GHz, as one run now mixes low and high bands.
 
 ### Known limitations
 

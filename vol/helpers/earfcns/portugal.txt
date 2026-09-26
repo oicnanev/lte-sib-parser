@@ -1,0 +1,29 @@
+# LTE downlink EARFCNs used by Portuguese operators (268-xx), for sib-scan.sh -K
+# and the web app's "Portugal (known EARFCNs)" preset.
+#
+# Source: carriers decoded and EARFCNs advertised in SIB5 (interFreqCarrierFreqList)
+# by cells heard at one place in Portugal, September 2026. Not a complete national
+# list: operators use different carriers in different areas and change them over
+# time. The web app adds every EARFCN found in the readings database (read or
+# advertised in any SIB5) to this list at the start of each run.
+#
+# EARFCN   band  DL MHz
+6200     # B20   796.0
+6300     # B20   806.0
+6400     # B20   816.0
+3475     # B8    927.5
+3485     # B8    928.5
+3525     # B8    932.5
+3625     # B8    942.5
+3749     # B8    954.9
+1300     # B3    1815.0
+1500     # B3    1835.0
+1700     # B3    1855.0
+1875     # B3    1872.5
+103      # B1    2120.3
+300      # B1    2140.0
+500      # B1    2160.0
+2800     # B7    2625.0
+2950     # B7    2640.0
+3150     # B7    2660.0
+3350     # B7    2680.0

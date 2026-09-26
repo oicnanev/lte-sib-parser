@@ -40,7 +40,11 @@ GPS_STALE_S = 5
 # order matters: automatic ppm calibration runs on the first band, and a band
 # overlapping an earlier one (B28 includes 791-803 MHz of B20) skips carriers
 # already read
-PRESETS = {"pt": {"label": "Portugal: B20, B8, B28, B3, B1, B7", "bands": [20, 8, 28, 3, 1, 7]}}
+PRESETS = {
+    "pt_known": {"label": "Portugal (known EARFCNs, fast)", "earfcns_file": "portugal.txt"},
+    "pt": {"label": "Portugal sweep: B20, B8, B28, B3, B1, B7", "bands": [20, 8, 28, 3, 1, 7]},
+}
+EARFCN_LISTS = os.path.join(VOL, "helpers", "earfcns")
 LOG_LINES = 500
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -254,6 +258,7 @@ STATUS_RES = [
     (re.compile(r"^frequency correction: ([-\d.]+) ppm"), lambda m: {"ppm": float(m.group(1))}),
     (re.compile(r"^calibrating"), lambda m: {"task": "calibrating"}),
     (re.compile(r"^sweeping band"), lambda m: {"task": "sweeping"}),
+    (re.compile(r"^checking EARFCNs"), lambda m: {"task": "checking EARFCNs"}),
     (re.compile(r"EARFCN (\d+) Freq\. .* looking for PSS"), lambda m: {"task": "cell_search", "earfcn": int(m.group(1))}),
 ]
 NOISE = re.compile(r"^\s*$|^\.+$|^(earfcn|start_earfcn|scanned earfcns|queue to scan earfcn)")
@@ -348,6 +353,8 @@ def build_job(p):
     table = bands_table()
 
     band = str(p.get("band", "")).strip()
+    if band in PRESETS and "earfcns_file" in PRESETS[band]:
+        return known_job(p, PRESETS[band]["earfcns_file"])
     if band in PRESETS:
         bands = PRESETS[band]["bands"]
     elif band == "custom":
@@ -415,6 +422,64 @@ def build_job(p):
         except ValueError:
             raise BadRequest("ppm must be a number or auto")
     return steps, ppm
+
+
+def known_earfcns(filename):
+    """(earfcns to check, EARFCNs known to be 20 MHz wide): the preset's file plus
+    every EARFCN in the readings database, read or advertised in any SIB5"""
+    earfcns = []
+    with open(os.path.join(EARFCN_LISTS, filename)) as f:
+        for line in f:
+            word = line.split("#", 1)[0].strip()
+            if word.isdigit():
+                earfcns.append(int(word))
+    wide = set()
+    with db() as conn:
+        for e, bw, sib5 in conn.execute("SELECT earfcn, bandwidth_mhz, sib5 FROM readings"):
+            earfcns.append(e)
+            if bw is not None and bw >= 20:
+                wide.add(e)
+            if sib5:
+                try:
+                    earfcns += [c["dl-CarrierFreq"] for c in json.loads(sib5).get("interFreqCarrierFreqList", [])]
+                except (ValueError, KeyError, TypeError):
+                    pass
+    return list(dict.fromkeys(earfcns)), sorted(wide)
+
+
+def known_job(p, filename):
+    """one sib-scan.sh -K run over the known EARFCNs"""
+    earfcns, wide = known_earfcns(filename)
+    args = ["-K", " ".join(map(str, earfcns))]
+    if wide:
+        args += ["-W", " ".join(map(str, wide))]
+    gain, gain_high = number(p, "gain"), number(p, "gain_high")
+    if gain is not None:
+        args += ["-g", str(gain)]
+    if gain_high is not None:
+        args += ["-G", str(gain_high)]
+    device = p.get("device", "soapy")
+    if device not in DEVICES:
+        raise BadRequest("unknown device")
+    if device:
+        args += ["-d", device]
+    dev_args = str(p.get("device_args", ""))
+    if len(dev_args) > 200 or "\n" in dev_args:
+        raise BadRequest("device args too long")
+    if dev_args:
+        args += ["-a", dev_args]
+    for key, flag in (("t", "-t"), ("T", "-T")):
+        v = number(p, key)
+        if v is not None:
+            args += [flag, str(v)]
+    args += ["-R", READINGS_DB, "-D", CELLS_DB, "-L", location.LOCATION_FILE]
+    ppm = str(p.get("ppm", "")).strip()
+    if ppm and ppm != "auto":
+        try:
+            ppm = str(float(ppm))
+        except ValueError:
+            raise BadRequest("ppm must be a number or auto")
+    return [(None, args)], ppm or "auto"
 
 
 def start_scan(params):

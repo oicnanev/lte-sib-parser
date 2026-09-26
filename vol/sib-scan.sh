@@ -6,6 +6,7 @@ show_help () {
   -d      device name (UHD,soapy,bladeRF)
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
+  -G      rx gain for EARFCNs at 1 GHz and above (default: same as -g)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (the ratio to the cell's sample rate must be an integer)
   -p      frequency correction in ppm for SDR clock error, positive
@@ -22,6 +23,12 @@ show_help () {
           bandwidth, no SIBs): a HackRF (20 MSPS) cannot decode them
   -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
           (carriers already read in an overlapping band)
+  -K      check a list of known EARFCNs for cells with PSS/SSS (HackRF,
+          numpy), then run srsue only where there is one. EARFCNs advertised
+          in SIB5 by the cells decoded are checked too. With -p auto the
+          clock is measured in the same pass. Example: -K "6200 1875 2800"
+  -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
+          a HackRF): saved as detection-only readings, no srsue
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -87,6 +94,9 @@ location_file=/tmp/lte_location.json
 device_args=""
 device_name=""
 rx_gain="30"
+rx_gain_high=""
+known_list=""
+wide_list=""
 srate_args=()
 ppm="0"
 
@@ -99,7 +109,7 @@ no_requrse=0
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:r:p:t:T:hq:Swx:nD:R:L:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:nD:R:L:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -110,6 +120,12 @@ while getopts "s:e:b:a:d:g:r:p:t:T:hq:Swx:nD:R:L:?" opt; do
     a)  device_args=$OPTARG
       ;;
     g)  rx_gain=$OPTARG
+      ;;
+    G)  rx_gain_high=$OPTARG
+      ;;
+    K)  known_list=$OPTARG
+      ;;
+    W)  wide_list=$OPTARG
       ;;
     r)  srate_args=(--rf.srate "$OPTARG")
       ;;
@@ -153,7 +169,7 @@ scan_id=$(python3 $PY_PATH/readings_db.py -d "$readings_database" new-scan \
 echo "scan id: $scan_id"
 trap 'python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"' EXIT
 
-if [[ $ppm == "auto" ]]; then
+if [[ $ppm == "auto" && -z $known_list ]]; then
   if [[ -z $band ]]; then
     echo "-p auto needs band (-b)"
     exit 1
@@ -168,7 +184,13 @@ if [[ $ppm == "auto" ]]; then
   python3 $PY_PATH/readings_db.py -d "$readings_database" set-ppm "$scan_id" "$ppm"
 fi
 
-if [[ $do_sweep -ne 0 ]]; then
+earfcn_to_check=()
+earfcn_checked=()
+if [[ -n $known_list ]]; then
+  earfcn_to_check=($known_list)
+  initial_task="check_known"
+  do_cellsearch=0
+elif [[ $do_sweep -ne 0 ]]; then
   if [[ -z $band ]]; then
     echo "-S needs band (-b)"
     exit 1
@@ -267,7 +289,9 @@ while true; do
         "choose_earfcn_for_srsue")
             # check if queue of earfcn's empty
             if [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then
-                if [[ $do_cellsearch -eq 0 ]]; then
+                if [[ ${#earfcn_to_check[@]} -ne 0 ]]; then
+                  task="check_known"
+                elif [[ $do_cellsearch -eq 0 ]]; then
                   task="exit"
                 else
                   task="cell_search"
@@ -295,11 +319,15 @@ while true; do
             rm -f $SRSUELOG $SRSUEOUT
             dl_freq=$(python3 $PY_PATH/earfcn_to_freq.py $earfcn)
             freq_offset=$(python3 -c "print(round($dl_freq * $ppm * 1e-6))")
+            gain=$rx_gain
+            if [[ -n $rx_gain_high && $dl_freq -ge 1000000000 ]]; then
+              gain=$rx_gain_high
+            fi
 			      srsue $SRSUECFG --log.filename $SRSUELOG \
                             --expert.lte_sample_rates=true \
                             --rf.device_name "$device_name" \
                             --rf.device_args "$device_args" \
-                            --rf.rx_gain "$rx_gain" \
+                            --rf.rx_gain "$gain" \
                             "${srate_args[@]}" \
                             --rf.freq_offset "$freq_offset" \
                             --rat.eutra.dl_earfcn "$earfcn" 1>$SRSUEOUT &
@@ -316,6 +344,17 @@ while true; do
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
             fi
 
+            if [[ -n $known_list ]]; then
+              # -K: EARFCNs advertised in SIB5 are checked (cheap) before srsue
+              for e in $(python3 $PY_PATH/get_neigh.py -d "$database" -e "$earfcn" 2>/dev/null); do
+                if ! containsElement $e "${earfcn_checked[@]}" && ! containsElement $e "${earfcn_to_check[@]}"; then
+                  echo "SIB5 of $earfcn advertises $e: will check it"
+                  earfcn_to_check+=($e)
+                fi
+              done
+              task="choose_earfcn_for_srsue"
+              continue
+            fi
             if [[ $no_requrse -ne 0 ]]; then
               task="choose_earfcn_for_srsue"
               continue
@@ -328,6 +367,25 @@ while true; do
                     fi
             done
             # if there is new earfcn's in earfcn_need_scan, "choose_earfcn_for_srsue" will find it
+            task="choose_earfcn_for_srsue"
+            continue ;;
+
+        "check_known")
+            echo "checking EARFCNs for cells: ${earfcn_to_check[*]}"
+            check_out=$(python3 $PY_PATH/check_earfcns.py -v -e "${earfcn_to_check[*]}" -p "$ppm" \
+                          --wide "$wide_list" --readings-db "$readings_database" --scan-id "$scan_id" \
+                          --location-file "$location_file")
+            earfcn_checked+=("${earfcn_to_check[@]}")
+            earfcn_to_check=()
+            measured_ppm=$(sed -n 's/^ppm //p' <<< "$check_out")
+            if [[ $ppm == "auto" && -n $measured_ppm ]]; then
+              ppm=$measured_ppm
+              echo "frequency correction: $ppm ppm"
+              python3 $PY_PATH/readings_db.py -d "$readings_database" set-ppm "$scan_id" "$ppm"
+            fi
+            for e in $(grep -v '^ppm ' <<< "$check_out"); do
+              containsElement $e "${earfcn_scanned[@]}" || earfcn_need_scan+=($e)
+            done
             task="choose_earfcn_for_srsue"
             continue ;;
 
