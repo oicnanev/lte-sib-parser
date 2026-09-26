@@ -97,6 +97,8 @@ cannot be tested end-to-end without it.
   sib-scan converts ppm to `--rf.freq_offset` per EARFCN; `cell_search` gets
   `-p` via `worker/cell_search_ppm.patch`. srsRAN PSS search tolerates only a
   few kHz CFO.
+- PSS/SSS lock (lte_pss.measure): SSS ≥0.6, or two captures ≥0.25 at the same
+  CFO ±2 kHz. Real B20 cells score only 0.3-0.6; more capture gain is worse.
 - Gain: `-g 56` on B20; B3 (1.8 GHz) needs `-g 70` (at 56 srsue sees PSS at
   PSR ~2.4 but never locks). `-r 15.36e6` makes no difference.
 - `cell_search` (C example) is unreliable with HackRF even with `-p`: finds
@@ -152,4 +154,10 @@ cannot be tested end-to-end without it.
    (list mode 6200 + 1875 → PCI/CGI/TAC/RSRP/SIBs + manual location; stop during
    calibration leaves no zombies). Browser geolocation not testable in the
    in-app browser (denied) — check in the user's own browser.
-9. Further goals: to be defined with the user.
+9. ✅ Web app: Frequency column; band presets (Portugal: 20 8 28 3 1 7) and
+   custom lists run as sequential sib-scan jobs (ppm from first band reused,
+   `-x` skips carriers already read — B28 overlaps B20); gain ≥1 GHz field.
+10. ✅ systemd: `systemd/install-service.sh` installs a unit running
+    `docker compose up --no-build webapp` (verified with systemd-analyze, not
+    installed: needs the user's sudo).
+11. Further goals: to be defined with the user.

@@ -20,7 +20,6 @@ parser.add_argument("-b", "--band", type=int, default=20)
 parser.add_argument("-l", "--lna", type=int, default=32)
 parser.add_argument("-g", "--vga", type=int, default=20)
 parser.add_argument("-m", "--max-carriers", type=int, default=3)
-parser.add_argument("--min-sss", type=float, default=0.4, help="minimum SSS score to trust a cell")
 args = parser.parse_args()
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +36,8 @@ if not centres:
 ppms = []
 for f in centres[: args.max_carriers]:
     tuned = round(f / 1e5) * 1e5  # nearest raster point
-    r = lte_pss.measure(tuned, args.lna, args.vga, min_sss=args.min_sss)
-    if r["sss_score"] < args.min_sss:
+    r = lte_pss.measure(tuned, args.lna, args.vga)
+    if not r["locked"]:
         sys.stderr.write("%.1f MHz: no cell (SSS score %.2f)\n" % (tuned / 1e6, r["sss_score"]))
         continue
     # cfo = raster error + tuned * ppm: pick the raster error with the smallest |ppm|

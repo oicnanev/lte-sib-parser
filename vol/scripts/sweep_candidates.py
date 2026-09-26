@@ -30,8 +30,11 @@ parser.add_argument("--centres", action="store_true",
                     help="only print carrier centres in Hz, whole carriers and strongest first")
 parser.add_argument("-r", "--refine", action="store_true",
                     help="find the exact EARFCN and PCI with PSS/SSS (needs numpy and a right -p)")
+parser.add_argument("-x", "--exclude", default="",
+                    help="DL frequencies in MHz to skip (carriers already read in an overlapping band)")
 parser.add_argument("-v", "--verbose", action="store_true", help="print carriers to stderr")
 args = parser.parse_args()
+exclude = [float(f) for f in args.exclude.replace(",", " ").split()]
 if args.refine:
     import lte_pss
 
@@ -89,16 +92,29 @@ while i < len(smooth):
         i = j + 1
     else:
         i += 1
+runs_raw = list(runs)
 
 # a lightly loaded cell has holes in its spectrum (no data scheduled there):
 # join blocks closer than the smallest guard between adjacent LTE carriers
+# ... but the guard between two operators' adjacent carriers can be just as
+# narrow. With PSS/SSS (--refine) both the joined and the separate blocks are
+# tried and only those with LTE sync at their centre are kept; without it, only
+# the joined blocks are used.
 merged = []
 for i, j in runs:
     if merged and (i - merged[-1][1]) * BIN_HZ < MERGE_GAP_HZ:
         merged[-1] = (merged[-1][0], j)
     else:
         merged.append((i, j))
-runs = [(i, j) for i, j in merged if (j - i + 1) * BIN_HZ >= 1e6]
+
+
+def wide(rs):
+    return [(i, j) for i, j in rs if (j - i + 1) * BIN_HZ >= 1e6]
+
+
+runs = wide(merged)
+if args.refine or args.centres:
+    runs += [r for r in wide(runs_raw) if r not in runs]
 
 
 def crossing(a, b, level):
@@ -125,6 +141,11 @@ for i, j in runs:
     earfcn = start_earfcn + round(pos)
     if not start_mhz <= centre / 1e6 <= end_mhz or earfcn in [c["earfcn"] for c in carriers]:
         continue
+    # the centre estimate is +-100 kHz: skip carriers already read in an overlapping band
+    if any(abs(centre / 1e6 - f) <= 0.25 for f in exclude):
+        if args.verbose:
+            sys.stderr.write("carrier %.1f MHz: already read in another band, skipped\n" % (centre / 1e6))
+        continue
     width = (f_hi - f_lo) / 1e6
     carriers.append({
         "centre": centre, "earfcn": earfcn, "snr": plateau - noise, "width": width,
@@ -141,6 +162,7 @@ if args.centres:
         print("%.0f" % c["centre"])
     exit(0)
 
+printed = set()
 for c in carriers:
     line = " ".join(str(e) for e in c["nearest"])
     note = ""
@@ -149,9 +171,11 @@ for c in carriers:
         # residual offset measured on the PSS/SSS tells which raster point it is
         tuned = (start_mhz + (c["earfcn"] - start_earfcn) / 10) * 1e6
         r = lte_pss.measure(tuned, args.lna, args.vga)
-        if r["sss_score"] >= 0.4:
+        if r["locked"]:
             k = round((r["cfo_hz"] - tuned * args.ppm * 1e-6) / 1e5)
             line = str(c["earfcn"] + k)
+            if line in printed:  # joined and separate blocks of the same carrier
+                continue
             note = ", PCI %d (SSS %.2f)" % (r["pci"], r["sss_score"])
         else:
             # no LTE sync signals: GSM/NR/other, or too weak for srsue anyway
@@ -162,4 +186,5 @@ for c in carriers:
     if args.verbose:
         sys.stderr.write("carrier %.1f MHz width %.2f MHz (~%s MHz) %.1f dB above noise -> %s%s\n"
                          % (c["centre"] / 1e6, c["width"], c["bw"], c["snr"], line, note))
+    printed.add(line)
     print(line)

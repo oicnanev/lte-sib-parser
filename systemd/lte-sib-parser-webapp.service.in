@@ -1,0 +1,20 @@
+# Installed by systemd/install-service.sh, which fills in @PROJECT_DIR@ and @DOCKER@.
+[Unit]
+Description=LTE SIB scanner web app (http://localhost:8080)
+Documentation=file://@PROJECT_DIR@/README.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+# --no-build: build the image beforehand (docker compose build); building at boot
+# would take many minutes
+ExecStart=@DOCKER@ compose up --no-build webapp
+ExecStop=@DOCKER@ compose stop webapp
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

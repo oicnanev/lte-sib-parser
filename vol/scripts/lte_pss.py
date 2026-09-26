@@ -193,13 +193,21 @@ def detect(x, cfo_min=-150e3, cfo_max=150e3):
     return result
 
 
-def measure(freq_hz, lna=32, vga=20, tries=2, min_sss=0.4):
-    """capture + detect at freq_hz, retrying on a weak result; returns detect() dict"""
-    best = None
-    for _ in range(tries):
-        r = detect(capture(freq_hz, lna=lna, vga=vga))
-        if best is None or r["sss_score"] > best["sss_score"]:
-            best = r
-        if best["sss_score"] >= min_sss:
-            break
-    return best
+def measure(freq_hz, lna=32, vga=20, strong=0.6, weak=0.25):
+    """capture + detect at freq_hz; returns the detect() dict plus "locked".
+
+    A lock is accepted when the SSS score reaches `strong`, or when two captures
+    both reach `weak` at the same CFO (within 2 kHz): a false lock falls at a
+    random CFO in the +-150 kHz search range. The PCI may differ between the two:
+    several cells (sectors) are often seen on one carrier. Gain is fixed: more
+    gain only lets strong neighbouring carriers eat the 8-bit range.
+    """
+    first = detect(capture(freq_hz, lna=lna, vga=vga))
+    if first["sss_score"] >= strong:
+        return dict(first, locked=True)
+    second = detect(capture(freq_hz, lna=lna, vga=vga))
+    best = max(first, second, key=lambda r: r["sss_score"])
+    locked = (best["sss_score"] >= strong or
+              (min(first["sss_score"], second["sss_score"]) >= weak and
+               abs(first["cfo_hz"] - second["cfo_hz"]) <= 2e3))
+    return dict(best, locked=locked)

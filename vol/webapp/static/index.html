@@ -30,6 +30,9 @@
         <label class="for-band">Band
           <select name="band"></select>
         </label>
+        <label class="for-bands">Bands
+          <input name="bands" placeholder="20 3 7">
+        </label>
         <label class="for-list">EARFCNs
           <input name="earfcns" placeholder="6200 6300 6400">
         </label>
@@ -49,10 +52,13 @@
           <label>Gain
             <input name="gain" type="number" value="56" min="0" max="120">
           </label>
-          <label>Clock ppm
-            <input name="ppm" value="auto" title="auto, or a number (positive tunes higher)">
+          <label title="bands above 1 GHz; empty = same as Gain">Gain ≥ 1 GHz
+            <input name="gain_high" type="number" value="70" min="0" max="120">
           </label>
         </div>
+        <label>Clock ppm
+          <input name="ppm" value="auto" title="auto (calibrated on the lowest band), or a number (positive tunes higher)">
+        </label>
         <div class="row">
           <label>-t (s)
             <input name="t" type="number" value="30" min="5">
@@ -101,7 +107,7 @@
         <table id="readings">
           <thead>
             <tr>
-              <th>Time</th><th>Band</th><th>EARFCN</th><th>PCI</th><th>CGI</th><th>PLMNs</th>
+              <th>Time</th><th>Band</th><th>Frequency</th><th>EARFCN</th><th>PCI</th><th>CGI</th><th>PLMNs</th>
               <th>TAC</th><th>eNB</th><th>Cell</th><th>RSRP</th><th>SIBs</th><th>Location</th>
             </tr>
           </thead>

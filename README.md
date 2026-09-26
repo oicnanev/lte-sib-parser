@@ -190,6 +190,8 @@ usage: sib-scan.sh [OPTION]...
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
           only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
+  -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
+          (carriers already read in an overlapping band)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q "1300 1301 1302 1303"
   -n      no reqursive scan, do no scan cells from sib5
@@ -274,17 +276,39 @@ Open <http://localhost:8080>. It shows:
 
 - **Scan form**: mode (sweep, cell_search, EARFCN list), band, device, gain,
   clock ppm (`auto` or a number), timeouts, SIB5 neighbours; **Run** / **Stop**.
+  The band can also be a preset or a custom list, see [Several bands](#several-bands).
 - **Activity**: current task and EARFCN, and the scan's live output.
 - **Map**: your current position (with its accuracy) and one marker per place
   where readings were made, coloured by the best RSRP there; click it for the
   list of cells.
-- **Readings table**: time, band, EARFCN, PCI, CGI, PLMNs, TAC, eNB ID, cell ID,
-  RSRP, decoded SIBs and location, updated live; filter by scan; click a row
+- **Readings table**: time, band, downlink frequency, EARFCN, PCI, CGI, PLMNs,
+  TAC, eNB ID, cell ID, RSRP, decoded SIBs and location, updated live; filter by scan; click a row
   for every field and the full MIB/SIB contents.
 
 Only one scan runs at a time (the SDR can't be shared). The server is
 `vol/webapp/server.py`, Python standard library only; live updates use
 Server-Sent Events.
+
+### Several bands
+
+The **Band** list starts with presets and ends with **Custom list…** (e.g.
+`20 3 7`). The preset **Portugal: B20, B8, B28, B3, B1, B7** covers the FDD bands
+Portuguese operators use for LTE; B38 (TDD) is left out because the PSS/SSS
+detector assumes FDD.
+
+The bands are scanned one after another, in the order given, each as its own
+`sib-scan.sh` run and its own entry in `scans`:
+
+- **Gain**: *Gain* is used below 1 GHz and *Gain ≥ 1 GHz* above (with the
+  author's HackRF, 56 on B20 and 70 on B3); leave the second empty to use one
+  gain everywhere.
+- **Clock**: with `auto`, the clock error is measured on the first band that
+  has LTE cells and reused for the rest, since calibration on high bands is
+  ambiguous for large errors. Put a low band first.
+- **Overlapping bands**: B28's downlink (758–803 MHz) includes the lower part of
+  B20 (791–821 MHz). Carriers already read in an earlier band are passed to the
+  next sweeps with `-x` and skipped, so a B20 cell is not read again as B28.
+- **Stop** ends the current band and the rest of the list.
 
 ### Location
 
@@ -312,6 +336,28 @@ the web app is running.
 - Map tiles come from OpenStreetMap's servers, which therefore see which area
   the map shows. Everything else stays on your machine; `vol/output/` is
   ignored by git because readings reveal where they were made.
+
+### Run at boot (systemd)
+
+To start the web app automatically when the machine boots:
+```bash
+docker compose build                   # the service does not build the image
+sudo systemd/install-service.sh        # install, enable and start
+```
+The script writes `/etc/systemd/system/lte-sib-parser-webapp.service` from
+`systemd/lte-sib-parser-webapp.service.in` (filling in this folder and the path
+of `docker`), enables `docker.service`, and enables and starts the unit, which
+runs `docker compose up --no-build webapp` in this folder after Docker starts.
+
+```bash
+systemctl status lte-sib-parser-webapp
+journalctl -u lte-sib-parser-webapp -f          # server log
+sudo systemctl stop lte-sib-parser-webapp       # stop until next boot
+sudo systemd/install-service.sh --uninstall     # remove
+```
+Moving the project folder requires running the install script again. Stop a
+web app started by hand (`docker compose stop webapp`) before installing, or
+the two will compete for port 8080.
 
 ## Readings database
 
@@ -485,6 +531,31 @@ Changes in this fork, newest last, with the reason for each.
     than the `-t` timeout, so the first EARFCN of every new container failed.
 19. **Container shell with `docker compose run --rm worker`** documented as the
     default instead of `run.sh`.
+20. **Several bands in one run** (web app). Implemented in the server as a list
+    of `sib-scan.sh` runs rather than in the script, so each band keeps its own
+    scan record and log. The ppm measured on the first band is reused: on high
+    bands the raster/clock split is ambiguous (decision 6). A second gain for
+    bands above 1 GHz, because B3 needed `-g 70` where B20 used 56.
+21. **Overlapping bands** (`-x`). B28 (758–803 MHz) contains B20's 791–803 MHz:
+    a test scan read a B20 cell again as B28 EARFCN 9590. Bands now run in the
+    given order and later sweeps skip carriers already read (±0.25 MHz).
+22. **Joined and separate spectrum blocks both tried** (sweep with PSS/SSS).
+    Merging blocks closer than 0.5 MHz (decision 7) also merged two operators'
+    adjacent 10 MHz B20 carriers into one fake 20 MHz block. With PSS/SSS
+    available, both the joined and the separate blocks are tested, and only
+    those with LTE sync at their centre are kept.
+23. **Lock needs a strong SSS or two agreeing captures.** A single capture gave
+    a false lock with SSS 0.42 between two carriers, while real B20 cells score
+    only 0.3–0.6 (strong neighbours fill the 8-bit range; more gain made it
+    worse, so the capture gain stays fixed). A lock is accepted at SSS ≥ 0.6, or
+    when two captures both reach 0.25 at the same CFO (±2 kHz): a false lock
+    lands at a random CFO in ±150 kHz, so two agree by chance ~1 % of the time.
+    The PCI may differ between the two, as several sectors share a carrier.
+24. **systemd unit around `docker compose up`** instead of a Docker restart
+    policy: it starts after `docker.service`, logs to the journal, and can be
+    stopped/disabled like any service. `--no-build`, because building srsRAN at
+    boot would take many minutes; the install script refuses to install
+    without the image.
 
 ### Known limitations
 
@@ -497,6 +568,10 @@ Changes in this fork, newest last, with the reason for each.
   first srsue run, which can make the first EARFCN time out.
 - A `sib-scan.sh` call rejected by the cell_search checks is still recorded as
   an empty scan in `readings.sqlite`.
+- A reading's band comes from its EARFCN; the band a cell announces in SIB1
+  (`freqBandIndicator`) is not checked.
+- The Portugal preset's band list is based on the bands Portuguese operators
+  hold; bands without LTE cells just cost a calibration/sweep (~30 s).
 
 ## License
 

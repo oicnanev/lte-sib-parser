@@ -35,6 +35,12 @@ CELLS_DB = os.path.join(VOL, "output", "cells.sqlite")
 BANDS_DB = os.path.join(VOL, "helpers", "lte_bands.sqlite3")
 DEVICES = {"soapy", "UHD", "bladeRF", ""}
 GPS_STALE_S = 5
+# bands swept by the "Portugal" preset: the FDD bands Portuguese operators use for
+# LTE (B38/TDD is left out: lte_pss.py assumes FDD)
+# order matters: automatic ppm calibration runs on the first band, and a band
+# overlapping an earlier one (B28 includes 791-803 MHz of B20) skips carriers
+# already read
+PRESETS = {"pt": {"label": "Portugal: B20, B8, B28, B3, B1, B7", "bands": [20, 8, 28, 3, 1, 7]}}
 LOG_LINES = 500
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -50,7 +56,9 @@ class Hub:
         self.log = []
         self.proc = None
         self.status = {"running": False, "scan_id": None, "task": None, "earfcn": None,
-                       "ppm": None, "started": None, "args": None, "exit_code": None}
+                       "ppm": None, "band": None, "bands": [], "step": None,
+                       "started": None, "exit_code": None}
+        self.stop_requested = False
         self.gps = None  # last gpsd fix
         self.client_loc = None  # browser or manual
         self.location = None  # effective
@@ -250,7 +258,8 @@ STATUS_RES = [
 NOISE = re.compile(r"^\s*$|^\.+$|^(earfcn|start_earfcn|scanned earfcns|queue to scan earfcn)")
 
 
-def reader_thread(proc):
+def run_proc(proc):
+    """follow one sib-scan.sh run until it exits; returns its exit code"""
     for raw in proc.stdout:
         line = raw.rstrip("\n")
         for rx, fn in STATUS_RES:
@@ -265,99 +274,166 @@ def reader_thread(proc):
         with db() as conn:
             if not conn.execute("SELECT finished FROM scans WHERE id = ?", (sid,)).fetchone()[0]:
                 readings_db.end_scan(conn, sid)
-    hub.add_log("[webapp] scan finished (exit code %s)" % code)
-    hub.set_status(running=False, task=None, earfcn=None, exit_code=code)
-    hub.proc = None
+    return code
+
+
+def job_thread(steps, ppm):
+    """run the steps (one sib-scan.sh call per band) one after another"""
+    code = None
+    done_mhz = []  # carriers read so far: overlapping bands (e.g. B28/B20) must not read them again
+    for i, (band, args) in enumerate(steps):
+        if hub.stop_requested:
+            break
+        a = list(args) + (["-p", ppm] if ppm else [])
+        if done_mhz and "-S" in a:
+            a += ["-x", " ".join("%.1f" % f for f in sorted(set(done_mhz)))]
+        hub.set_status(step="%d/%d" % (i + 1, len(steps)) if len(steps) > 1 else None,
+                       band=band, scan_id=None, task="starting", earfcn=None)
+        hub.add_log("[webapp] ./sib-scan.sh " + " ".join(a))
+        proc = subprocess.Popen(["bash", SIB_SCAN] + a, cwd=VOL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                start_new_session=True)
+        hub.proc = proc
+        code = run_proc(proc)
+        hub.proc = None
+        sid = hub.status.get("scan_id")
+        if sid:
+            with db() as conn:
+                done_mhz += [r[0] for r in conn.execute(
+                    "SELECT dl_freq_mhz FROM readings WHERE scan_id = ? AND mib IS NOT NULL", (sid,))
+                    if r[0] is not None]
+        hub.add_log("[webapp] band %s finished (exit code %s)" % (band, code) if band
+                    else "[webapp] scan finished (exit code %s)" % code)
+        # calibrate once, on the lowest band, and reuse it: calibration on high
+        # bands is ambiguous for large clock errors
+        if ppm == "auto" and hub.status.get("ppm") is not None:
+            ppm = "%.2f" % hub.status["ppm"]
+            if i + 1 < len(steps):
+                hub.add_log("[webapp] reusing %s ppm for the next bands" % ppm)
+    if hub.stop_requested:
+        hub.add_log("[webapp] stopped")
+    hub.set_status(running=False, task=None, earfcn=None, step=None, exit_code=code)
 
 
 class BadRequest(Exception):
     pass
 
 
-def build_args(p):
-    """sib-scan.sh arguments from the web form, validated (no shell involved)"""
-    args = []
-    mode = p.get("mode", "sweep")
-    band = p.get("band")
-    if band not in (None, ""):
-        try:
-            band = int(band)
-        except ValueError:
-            raise BadRequest("band must be a number")
-    if mode == "sweep":
-        if not band:
-            raise BadRequest("sweep mode needs a band")
-        args += ["-S", "-b", str(band)]
-    elif mode == "cell_search":
-        if not band:
-            raise BadRequest("cell_search needs a band")
-        args += ["-b", str(band)]
-    elif mode == "list":
-        earfcns = re.split(r"[\s,]+", str(p.get("earfcns", "")).strip())
-        if not earfcns or not all(e.isdigit() for e in earfcns):
-            raise BadRequest("EARFCN list must be numbers separated by spaces or commas")
-        args += ["-q", " ".join(earfcns)]
-    else:
-        raise BadRequest("unknown mode")
+def bands_table():
+    with sqlite3.connect(BANDS_DB) as conn:
+        return {r[0]: {"name": r[1], "mode": r[2], "start_mhz": r[3], "end_mhz": r[4]}
+                for r in conn.execute("SELECT band, name, mode, start_freq, end_freq FROM lte")}
 
+
+def number(p, key, default=None):
+    v = p.get(key)
+    if v in (None, ""):
+        return default
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        raise BadRequest("%s must be a number" % key)
+
+
+def build_job(p):
+    """(steps, ppm) from the web form, validated (no shell involved).
+
+    steps: [(band or None, sib-scan.sh args without -p)]; ppm: "auto", a number or "".
+    """
+    mode = p.get("mode", "sweep")
+    table = bands_table()
+
+    band = str(p.get("band", "")).strip()
+    if band in PRESETS:
+        bands = PRESETS[band]["bands"]
+    elif band == "custom":
+        bands = [b for b in re.split(r"[\s,]+", str(p.get("bands", "")).strip()) if b]
+        if not bands or not all(b.isdigit() for b in bands):
+            raise BadRequest("band list must be numbers separated by spaces or commas")
+        bands = [int(b) for b in bands]
+    elif band.isdigit():
+        bands = [int(band)]
+    else:
+        bands = []
+    unknown = [b for b in bands if b not in table]
+    if unknown:
+        raise BadRequest("unknown band(s): %s" % " ".join(map(str, unknown)))
+    # keep the given order (automatic calibration runs on the first band, so put a
+    # low band first) and drop repeats
+    bands = list(dict.fromkeys(bands))
+
+    common = []
     device = p.get("device", "soapy")
     if device not in DEVICES:
         raise BadRequest("unknown device")
     if device:
-        args += ["-d", device]
+        common += ["-d", device]
     dev_args = str(p.get("device_args", ""))
     if len(dev_args) > 200 or "\n" in dev_args:
         raise BadRequest("device args too long")
     if dev_args:
-        args += ["-a", dev_args]
+        common += ["-a", dev_args]
+    for key, flag in (("t", "-t"), ("T", "-T")):
+        v = number(p, key)
+        if v is not None:
+            common += [flag, str(v)]
+    if not p.get("recursive", False):
+        common.append("-n")
+    common += ["-R", READINGS_DB, "-D", CELLS_DB, "-L", location.LOCATION_FILE]
 
-    for key, flag in (("gain", "-g"), ("t", "-t"), ("T", "-T")):
-        v = p.get(key)
-        if v not in (None, ""):
-            try:
-                float(v)
-            except ValueError:
-                raise BadRequest("%s must be a number" % key)
-            args += [flag, str(int(float(v)))]
+    gain = number(p, "gain")
+    gain_high = number(p, "gain_high", gain)
+
+    def gain_args(b):
+        g = gain_high if b is not None and table[b]["start_mhz"] >= 1000 else gain
+        return ["-g", str(g)] if g is not None else []
+
+    if mode in ("sweep", "cell_search"):
+        if not bands:
+            raise BadRequest("%s needs a band" % mode)
+        steps = [(b, (["-S"] if mode == "sweep" else []) + ["-b", str(b)] + gain_args(b) + common)
+                 for b in bands]
+    elif mode == "list":
+        earfcns = re.split(r"[\s,]+", str(p.get("earfcns", "")).strip())
+        if not earfcns or not all(e.isdigit() for e in earfcns):
+            raise BadRequest("EARFCN list must be numbers separated by spaces or commas")
+        steps = [(None, ["-q", " ".join(earfcns)] + gain_args(None) + common)]
+    else:
+        raise BadRequest("unknown mode")
 
     ppm = str(p.get("ppm", "")).strip()
     if ppm == "auto":
-        if not band:
+        if mode == "list":
             raise BadRequest("automatic ppm needs a band")
-        args += ["-p", "auto"]
     elif ppm:
         try:
-            args += ["-p", str(float(ppm))]
+            ppm = str(float(ppm))
         except ValueError:
             raise BadRequest("ppm must be a number or auto")
-
-    if not p.get("recursive", False):
-        args.append("-n")
-    args += ["-R", READINGS_DB, "-D", CELLS_DB, "-L", location.LOCATION_FILE]
-    return args
+    return steps, ppm
 
 
 def start_scan(params):
-    if hub.proc and hub.proc.poll() is None:
+    if hub.status.get("running"):
         raise BadRequest("a scan is already running")
-    args = build_args(params)
+    steps, ppm = build_job(params)
     with hub.lock:
         hub.log.clear()
-    hub.add_log("[webapp] ./sib-scan.sh " + " ".join(args))
-    proc = subprocess.Popen(["bash", SIB_SCAN] + args, cwd=VOL, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            start_new_session=True)
-    hub.proc = proc
+    hub.stop_requested = False
     hub.set_status(running=True, scan_id=None, task="starting", earfcn=None, ppm=None,
-                   started=readings_db.now(), args=args, exit_code=None)
-    threading.Thread(target=reader_thread, args=(proc,), daemon=True).start()
+                   band=None, step=None, started=readings_db.now(), exit_code=None,
+                   bands=[b for b, _ in steps if b is not None])
+    threading.Thread(target=job_thread, args=(steps, ppm), daemon=True).start()
 
 
 def stop_scan():
-    proc = hub.proc
-    if not proc or proc.poll() is not None:
+    if not hub.status.get("running"):
         return False
+    hub.stop_requested = True
+    proc = hub.proc
     hub.add_log("[webapp] stopping scan")
+    if not proc or proc.poll() is not None:
+        return True
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -419,10 +495,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"location": hub.location, "gpsd": hub.location is not None
                                     and hub.location.get("source") == "gpsd"})
         if path == "/api/bands":
-            with sqlite3.connect(BANDS_DB) as conn:
-                rows = conn.execute("SELECT band, name, mode, start_freq, end_freq FROM lte ORDER BY band")
-                return self.reply(200, [dict(zip(("band", "name", "mode", "start_mhz", "end_mhz"), r))
-                                        for r in rows])
+            bands = [dict(band=b, **v) for b, v in sorted(bands_table().items())]
+            presets = [dict(id=k, **v) for k, v in PRESETS.items()]
+            return self.reply(200, {"bands": bands, "presets": presets})
         if path == "/api/scans":
             return self.reply(200, list_scans())
         if path == "/api/readings":

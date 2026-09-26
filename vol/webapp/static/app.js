@@ -63,7 +63,7 @@ function drawReadings() {
       fillColor: rsrpColor(best > -200 ? best : null), fillOpacity: 0.85,
     });
     const rows = list.map((r) =>
-      `<tr><td>B${esc(r.band)}</td><td>${esc(r.earfcn)}</td><td>PCI ${esc(r.pci ?? "?")}</td>` +
+      `<tr><td>B${esc(r.band)}</td><td>${esc(r.dl_freq_mhz ?? "")} MHz</td><td>${esc(r.earfcn)}</td><td>PCI ${esc(r.pci ?? "?")}</td>` +
       `<td>${esc(r.cgi ?? "")}</td><td>${r.rsrp != null ? esc(r.rsrp) + " dBm" : ""}</td></tr>`).join("");
     m.bindPopup(`<b>${list.length} reading(s)</b><br>${esc(list[0].location_source ?? "")}` +
       (list[0].accuracy_m ? ` ±${Math.round(list[0].accuracy_m)} m` : "") +
@@ -174,7 +174,8 @@ function renderTable(freshId) {
     const sibs = (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
     const time = new Date(r.time).toLocaleString();
     return `<tr data-id="${r.id}"${r.id === freshId ? ' class="fresh"' : ""}>` +
-      `<td>${esc(time)}</td><td>${esc(r.band)}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
+      `<td>${esc(time)}</td><td>${esc(r.band)}</td>` +
+      `<td>${r.dl_freq_mhz != null ? esc(r.dl_freq_mhz) + " MHz" : ""}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
       `<td>${esc(r.cgi ?? "")}</td><td>${esc(r.plmns ?? "")}</td><td>${esc(r.tac ?? "")}</td>` +
       `<td>${esc(r.enb_id ?? "")}</td><td>${esc(r.cell_id ?? "")}</td>` +
       `<td class="rsrp" style="color:${rsrpColor(r.rsrp)}">${r.rsrp != null ? esc(r.rsrp) : ""}</td>` +
@@ -229,9 +230,12 @@ const form = $("#scan-form");
 function updateFormMode() {
   const mode = form.mode.value;
   document.querySelector(".for-band").style.display = mode === "list" ? "none" : "";
+  document.querySelector(".for-bands").style.display =
+    mode !== "list" && form.band.value === "custom" ? "" : "none";
   document.querySelector(".for-list").style.display = mode === "list" ? "" : "none";
 }
 form.mode.onchange = updateFormMode;
+form.band.onchange = updateFormMode;
 
 form.onsubmit = async (e) => {
   e.preventDefault();
@@ -254,6 +258,8 @@ function showStatus(st) {
   $("#run").disabled = !!st.running;
   $("#stop").disabled = !st.running;
   const parts = [];
+  if (st.step) parts.push(`band ${st.step}`);
+  if (st.band) parts.push(`B${st.band}`);
   if (st.scan_id) parts.push(`scan #${st.scan_id}`);
   if (st.task) parts.push(st.task);
   if (st.earfcn) parts.push(`EARFCN ${st.earfcn}`);
@@ -306,10 +312,13 @@ function connect() {
 // ---------- start ----------
 
 (async function init() {
-  const bands = await api("/api/bands");
-  form.band.innerHTML = bands.map((b) =>
-    `<option value="${b.band}"${b.band === 20 ? " selected" : ""}>B${b.band} ${esc(b.name)} ` +
-    `(${b.start_mhz}–${b.end_mhz} MHz, ${esc(b.mode)})</option>`).join("");
+  const { bands, presets } = await api("/api/bands");
+  form.band.innerHTML =
+    presets.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("") +
+    bands.map((b) =>
+      `<option value="${b.band}"${b.band === 20 ? " selected" : ""}>B${b.band} ${esc(b.name)} ` +
+      `(${b.start_mhz}–${b.end_mhz} MHz, ${esc(b.mode)})</option>`).join("") +
+    '<option value="custom">Custom list…</option>';
   updateFormMode();
   for (const r of await api("/api/readings")) readings.set(r.id, r);
   await loadScans();

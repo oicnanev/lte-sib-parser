@@ -17,6 +17,8 @@ show_help () {
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
           only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
+  -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
+          (carriers already read in an overlapping band)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -87,12 +89,13 @@ ppm="0"
 
 do_cellsearch=1
 do_sweep=0
+exclude_mhz=""
 no_requrse=0
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:R:L:?" opt; do
+while getopts "s:e:b:a:d:g:r:p:t:T:hq:Sx:nD:R:L:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -117,6 +120,8 @@ while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:R:L:?" opt; do
     q)  earfcn_need_scan=($OPTARG)
       ;;
     S)  do_sweep=1
+      ;;
+    x)  exclude_mhz=$OPTARG
       ;;
     n)  no_requrse=1
       ;;
@@ -167,7 +172,7 @@ if [[ $do_sweep -ne 0 ]]; then
   if python3 -c "import numpy" 2>/dev/null; then
     refine=(--refine)
   fi
-  earfcn_need_scan=( $(python3 $PY_PATH/sweep_candidates.py -b "$band" -p "$ppm" -v "${refine[@]}") )
+  earfcn_need_scan=( $(python3 $PY_PATH/sweep_candidates.py -b "$band" -p "$ppm" -v "${refine[@]}" -x "$exclude_mhz") )
   initial_task="choose_earfcn_for_srsue"
   do_cellsearch=0
 elif [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then
