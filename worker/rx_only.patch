@@ -1,0 +1,44 @@
+diff --git a/lib/src/radio/radio.cc b/lib/src/radio/radio.cc
+index 8124185e6..3e7596822 100644
+--- a/lib/src/radio/radio.cc
++++ b/lib/src/radio/radio.cc
+@@ -419,6 +419,9 @@ bool radio::rx_dev(const uint32_t& device_idx, const rf_buffer_interface& buffer
+ 
+ bool radio::tx(rf_buffer_interface& buffer, const rf_timestamp_interface& tx_time)
+ {
++  // RX-only (lte-sib-parser): never transmit, never retune the shared LO for TX
++  return true;
++
+   bool                         ret = true;
+   std::unique_lock<std::mutex> lock(tx_mutex);
+   uint32_t                     ratio = interpolators[0].ratio;
+@@ -633,6 +636,9 @@ void radio::tx_end()
+ 
+ void radio::tx_end_nolock()
+ {
++  // RX-only (lte-sib-parser): never transmit, never retune the shared LO for TX
++  return;
++
+   if (!is_initialized) {
+     return;
+   }
+@@ -797,6 +803,9 @@ void radio::set_channel_rx_offset(uint32_t ch, int32_t offset_samples)
+ 
+ void radio::set_tx_freq(const uint32_t& carrier_idx, const double& freq)
+ {
++  // RX-only (lte-sib-parser): never transmit, never retune the shared LO for TX
++  return;
++
+   if (!is_initialized) {
+     return;
+   }
+@@ -850,6 +859,9 @@ void radio::set_tx_freq(const uint32_t& carrier_idx, const double& freq)
+ 
+ void radio::set_tx_gain(const float& gain)
+ {
++  // RX-only (lte-sib-parser): never transmit, never retune the shared LO for TX
++  return;
++
+   if (!is_initialized) {
+     return;
+   }

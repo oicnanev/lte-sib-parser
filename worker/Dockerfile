@@ -7,6 +7,8 @@ RUN apt update && apt install -y --no-install-recommends \
     --no-install-suggests \
     soapysdr-tools libsoapysdr-dev \
     soapysdr-module-lms7 \
+    soapysdr-module-hackrf hackrf \
+    soapysdr-module-rtlsdr \
     uhd-soapysdr \
     uhd-host libuhd-dev \
     # build deps
@@ -26,12 +28,14 @@ RUN git clone https://github.com/srsran/srsRAN_4G
 
 #COPY ./srsRAN_4G /srsRAN_4G
 
-COPY sib_logger.patch /srsRAN_4G
+COPY sib_logger.patch rx_only.patch /srsRAN_4G/
 
 WORKDIR /srsRAN_4G/
 
 # origin/master at 2024.12.25
-RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && git apply sib_logger.patch && \
+# rx_only.patch: srsue never transmits and never retunes the LO for TX
+# (required for half-duplex SDRs like HackRF, which share one LO)
+RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && git apply sib_logger.patch rx_only.patch && \
     mkdir build && cd build && \
     cmake -DUSE_LTE_RATES=ON ../ && make -j`nproc` cell_search srsue && make install && \
     ldconfig
