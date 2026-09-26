@@ -1,8 +1,32 @@
 #!/usr/bin/env python3
+import os
+import re
 import time
 import sys
 import json
 import sqlite3
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import location  # noqa: E402
+import readings_db  # noqa: E402
+
+PCI_RE = re.compile(r"Found Cell:.*PCI=(\d+)")
+
+
+def last_pci(stdout_file):
+    """PCI of the last cell srsue reported on stdout (the one it camps on), or None"""
+    try:
+        with open(stdout_file, errors="replace") as f:
+            found = PCI_RE.findall(f.read())
+    except OSError:
+        return None
+    return int(found[-1]) if found else None
+
+
+def pci_field(stdout_file):
+    """{"pci": n} when known, so a later miss never erases a known PCI"""
+    pci = last_pci(stdout_file)
+    return {"pci": pci} if pci is not None else {}
 
 
 def read_line(log, timeout):
@@ -32,6 +56,38 @@ def get_json(line):
         except json.decoder.JSONDecodeError:
             return None
     return None
+
+
+def earfcn_to_freq_mhz(earfcn):
+    conn = sqlite3.connect(band_database)
+    row = conn.execute(
+        "SELECT start_freq, start_earfcn FROM lte where ? >= start_earfcn and ? <= end_earfcn;",
+        (earfcn, earfcn),
+    ).fetchone()
+    return round(row[0] + 0.1 * (earfcn - row[1]), 1) if row else None
+
+
+class Reading:
+    """row in the readings database for the cell srsue is decoding, created lazily"""
+
+    def __init__(self, path, scan_id, location_file):
+        self.conn = readings_db.connect(path) if path else None
+        self.scan_id = scan_id
+        self.location_file = location_file
+        self.id = None
+        self.pending = {}
+
+    def set(self, **fields):
+        if not self.conn:
+            return
+        if self.id is None:
+            self.id = readings_db.create_reading(
+                self.conn, self.scan_id, earfcn, str(earfcn_to_band(earfcn)),
+                earfcn_to_freq_mhz(earfcn), location.current(self.location_file),
+            )
+        self.pending.update(fields)
+        readings_db.update_reading(self.conn, self.id, **self.pending)
+        self.pending = {}
 
 
 def earfcn_to_band(earfcn):
@@ -137,6 +193,18 @@ if "-d" in sys.argv:
     database = sys.argv[sys.argv.index("-d") + 1]
 if "-D" in sys.argv:
     band_database = sys.argv[sys.argv.index("-D") + 1]
+readings_path = None
+scan_id = None
+location_file = location.LOCATION_FILE
+if "-R" in sys.argv:
+    readings_path = sys.argv[sys.argv.index("-R") + 1]
+if "-I" in sys.argv:
+    scan_id = int(sys.argv[sys.argv.index("-I") + 1])
+if "-L" in sys.argv:
+    location_file = sys.argv[sys.argv.index("-L") + 1]
+stdout_file = "/tmp/ue.out"
+if "-o" in sys.argv:
+    stdout_file = sys.argv[sys.argv.index("-o") + 1]
 
 timeout = time.time() + timeout
 
@@ -176,6 +244,7 @@ while file_err:
         time.sleep(1)
 
 
+reading = Reading(readings_path if earfcn else None, scan_id, location_file)
 retrieved = {}
 need_retrieve = ["rsrp", "mib", "sib1", "sib2"]
 cell_sibs = []
@@ -202,6 +271,7 @@ while True:
             print(json.dumps(msg), flush=True)
             if database:
                 write_db(database, earfcn, "rsrp", str(msg["rsrp"]))
+            reading.set(rsrp=msg["rsrp"])
 
         # mib
         if "BCCH-BCH-Message" in msg:
@@ -215,6 +285,7 @@ while True:
             timeout = time.time() + timeout_add
             if database:
                 write_db(database, earfcn, "mib", json.dumps(mib))
+            reading.set(mib=json.dumps(mib), **pci_field(stdout_file))
 
         # sib
         if "BCCH-DL-SCH-Message" in msg:
@@ -239,6 +310,11 @@ while True:
                 timeout = time.time() + timeout_add
                 if database:
                     write_db(database, earfcn, "sib1", json.dumps(info))
+                try:
+                    ident = readings_db.sib1_identity(info)
+                except (KeyError, ValueError):
+                    ident = {}
+                reading.set(sib1=json.dumps(info), **pci_field(stdout_file), **ident)
             else:
                 sib_list = c1["systemInformation"]["criticalExtensions"][
                     "systemInformation-r8"
@@ -253,6 +329,8 @@ while True:
                             timeout = time.time() + timeout_add
                             if database:
                                 write_db(database, earfcn, sibType, json.dumps(info))
+                            if sibType in readings_db.SIBS:
+                                reading.set(**{sibType: json.dumps(info)})
 
     all_retrieved = all([need_sib in retrieved.keys() for need_sib in need_retrieve])
     if all_retrieved:

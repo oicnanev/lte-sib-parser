@@ -5,8 +5,10 @@ Passively finds LTE cells and decodes their broadcast system information
 srsRAN's `cell_search` with a patched, **receive-only** `srsue`.
 
 This is a fork of [godfuzz3r/lte-sib-parser](https://github.com/godfuzz3r/lte-sib-parser)
-that adds HackRF One support, fixes srsue transmitting, and adds a sweep-based
-scan mode with automatic clock calibration. Every change is listed in
+that adds HackRF One support, fixes srsue transmitting, adds a sweep-based
+scan mode with automatic clock calibration, a readings database with location
+and cell identity, and a local [web app](#web-app) with a live map. Every
+change is listed in
 [Changes and design decisions](#changes-and-design-decisions).
 
 > **srsue never transmits.** `worker/rx_only.patch` turns srsue's radio TX
@@ -24,7 +26,9 @@ scan mode with automatic clock calibration. Every change is listed in
      found in the spectrum and their exact EARFCN is confirmed with PSS/SSS;
    - `-q "e1 e2 …"`: an explicit list of EARFCNs.
 2. **Decode**: srsue is started on the EARFCN and `parse_save_sib.py` reads
-   its log, saving MIB, RSRP and SIBs to SQLite (see [Timeouts](#timeouts)).
+   its log, saving MIB, RSRP and SIBs to SQLite (see [Timeouts](#timeouts)):
+   one row per EARFCN in `cells.sqlite`, and one row per reading, with
+   location, CGI and PCI, in `readings.sqlite` (see [Readings database](#readings-database)).
 3. **Follow neighbours**: EARFCNs listed in SIB5 are scanned the same way,
    recursively (disable with `-n`).
 4. With `cell_search`, the band search resumes where it stopped until the
@@ -104,6 +108,29 @@ lsusb            # the SDR should be listed
 hackrf_info      # HackRF only
 ```
 
+### GPS receiver (optional)
+
+With a GPS receiver and `gpsd` on the host, every reading gets a GPS position;
+otherwise the web app uses the browser's position or one set on the map (see
+[Location](#location)).
+
+| Distribution | Command |
+|---|---|
+| Arch | `sudo pacman -S gpsd` |
+| Ubuntu / Debian | `sudo apt install gpsd gpsd-clients` |
+| Fedora | `sudo dnf install gpsd gpsd-clients` |
+| openSUSE | `sudo zypper install gpsd` |
+
+Point gpsd at the receiver (often `/dev/ttyACM0` or `/dev/ttyUSB0`): on
+Debian/Ubuntu set `DEVICES="/dev/ttyACM0"` in `/etc/default/gpsd`, on other
+distributions in `/etc/gpsd` or `/etc/sysconfig/gpsd`. Then:
+```bash
+sudo systemctl enable --now gpsd
+gpspipe -w -n 10 | grep TPV      # should show "mode":2 or 3 with lat/lon
+```
+gpsd listens on `127.0.0.1:2947`; the container reaches it through the host
+network.
+
 ### RTL-SDR dongles
 
 The kernel's DVB-T driver grabs RTL2832 dongles; blacklist it so SDR software
@@ -139,6 +166,11 @@ Inside the container:
 
 Results are written to `vol/output/` (ignored by git).
 
+Or start the [web app](#web-app):
+```bash
+docker compose up webapp          # then open http://localhost:8080
+```
+
 ## sib-scan.sh options
 
 ```
@@ -166,8 +198,12 @@ usage: sib-scan.sh [OPTION]...
   -T      after each newly decoded MIB/SIB, srsue keeps listening for
           this many seconds more; it stops earlier once all SIBs
           scheduled in SIB1 are decoded (default: 30)
-  -D      sqlite database to save results
+  -D      sqlite database to save results, one row per EARFCN
           (default: /vol/output/cells.sqlite)
+  -R      readings database: one row per cell reading with location,
+          CGI, PCI and RSRP (default: /vol/output/readings.sqlite)
+  -L      location file written by the web app (browser or map position),
+          used when gpsd has no fix (default: /tmp/lte_location.json)
 ```
 
 Examples:
@@ -226,6 +262,85 @@ python3 scripts/calibrate_ppm.py -b 20       # prints e.g. 20.52; prefer B20/B8
 Measured on the author's setup: B20 (3 × 10 MHz carriers) and B3 (10 MHz
 carrier) decoded MIB and SIB1–5, 7; each cell takes about a minute.
 
+## Web app
+
+A local web page to run scans and watch them live:
+
+```bash
+docker compose build              # once
+docker compose up webapp          # Ctrl+C to stop
+```
+Open <http://localhost:8080>. It shows:
+
+- **Scan form**: mode (sweep, cell_search, EARFCN list), band, device, gain,
+  clock ppm (`auto` or a number), timeouts, SIB5 neighbours; **Run** / **Stop**.
+- **Activity**: current task and EARFCN, and the scan's live output.
+- **Map**: your current position (with its accuracy) and one marker per place
+  where readings were made, coloured by the best RSRP there; click it for the
+  list of cells.
+- **Readings table**: time, band, EARFCN, PCI, CGI, PLMNs, TAC, eNB ID, cell ID,
+  RSRP, decoded SIBs and location, updated live; filter by scan; click a row
+  for every field and the full MIB/SIB contents.
+
+Only one scan runs at a time (the SDR can't be shared). The server is
+`vol/webapp/server.py`, Python standard library only; live updates use
+Server-Sent Events.
+
+### Location
+
+Each reading stores the position at the moment its first message was decoded,
+from exactly one source, in this order:
+
+1. **gpsd**, when it reports a 2D/3D fix (see [GPS receiver](#gps-receiver-optional));
+2. otherwise the **browser's geolocation**, which on a laptop is Wi-Fi based
+   (typically 20–100 m); the browser asks for permission first;
+3. if that is missing or not good enough, **Correct on map** and click where you
+   are: this manual position is kept until you press **Use browser** again.
+
+While gpsd has a fix, the browser and map buttons are disabled. The source
+(`gpsd`, `browser` or `manual`) and accuracy are saved with every reading.
+Scans run from the command line use gpsd, or the last browser/map position if
+the web app is running.
+
+### Security and privacy
+
+- The server listens on `127.0.0.1` only: it can start the SDR, so it is not
+  exposed to the network.
+- Requests that change state must be JSON and addressed to `localhost`, so a
+  web page open in another tab cannot start or stop scans (no CSRF, no DNS
+  rebinding).
+- Map tiles come from OpenStreetMap's servers, which therefore see which area
+  the map shows. Everything else stays on your machine; `vol/output/` is
+  ignored by git because readings reveal where they were made.
+
+## Readings database
+
+`vol/output/readings.sqlite` (option `-R`) keeps every reading instead of one
+row per EARFCN, so the same cell read at different places or times gives
+separate rows.
+
+Table `scans`: `id`, `started`, `finished`, `band`, `ppm`, `args`.
+
+Table `readings`:
+
+| Column | Content |
+|---|---|
+| `id`, `scan_id` | reading and scan |
+| `time`, `updated` | first decoded message and last update (UTC, ISO 8601) |
+| `earfcn`, `band`, `dl_freq_mhz` | carrier |
+| `pci` | physical cell ID (from srsue) |
+| `mcc`, `mnc`, `plmns` | first PLMN, and all PLMNs of a shared cell (`268-01 268-03`) |
+| `tac` | tracking area code |
+| `eci`, `enb_id`, `cell_id` | 28-bit E-UTRAN cell identity, split into eNB ID (`eci >> 8`) and cell ID (`eci & 0xff`) |
+| `cgi` | cell global identity `MCC-MNC-ECI`, as phones show it (e.g. `268-02-26040502`) |
+| `rsrp` | reference signal received power, dBm |
+| `lat`, `lon`, `accuracy_m`, `location_source`, `location_time` | position of the reading (see [Location](#location)) |
+| `mib`, `sib1` … `sib13` | decoded messages as JSON, as in `cells.sqlite` |
+
+```bash
+sqlite3 vol/output/readings.sqlite "SELECT time, earfcn, pci, cgi, rsrp, lat, lon FROM readings"
+```
+
 ## LimeSDR usage
 
 For LimeSDR devices use `-d soapy` to avoid a long search for UHD devices:
@@ -272,6 +387,9 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/lte_pss.py` | PSS/SSS search on raw IQ (library used by the two above) |
 | `vol/scripts/earfcn_to_freq.py <earfcn>` | EARFCN → downlink frequency in Hz |
 | `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages |
+| `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
+| `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
+| `vol/webapp/server.py` | the web app |
 
 ## Changes and design decisions
 
@@ -337,6 +455,36 @@ Changes in this fork, newest last, with the reason for each.
     for every client (local and remote) until `xhost -`, only so a GUI in the
     container could open windows, which the scan never does. If a GUI is
     needed, `xhost +SI:localuser:root` grants access to the local root user only.
+13. **Readings database** (`readings_db.py`, `-R`). `cells.sqlite` has one row
+    per EARFCN (`UNIQUE`), so a scan elsewhere overwrote earlier results; a map of
+    readings needs every reading. The new database keeps all of them with
+    location, PCI, RSRP, the identity decoded from SIB1 (MCC, MNC, all PLMNs,
+    TAC, ECI → eNB ID and cell ID, CGI) and every field of `cells.sqlite`.
+    `cells.sqlite` is still written, so the `dbparsers` scripts keep working.
+    Each run of `sib-scan.sh` is recorded in `scans`, registered before
+    calibration or sweep so a scan stopped early is recorded too.
+14. **PCI from srsue's standard output.** With `sib_logger.patch` the PHY log
+    has no PCI at the default level; srsue prints `Found Cell: … PCI=n` on
+    stdout, which used to go to `/dev/null`. It now goes to `/tmp/ue.out` and
+    the PCI of the last cell found (the one srsue camps on) is saved when the
+    MIB or SIB1 arrives; a later miss never erases a known PCI.
+15. **Location from one source at a time**: gpsd with a fix, else the browser,
+    which the user can override on the map (see [Location](#location)). A manual
+    position is kept until the user switches back to the browser, so a poor
+    Wi-Fi fix does not silently replace it.
+16. **Web app with the Python standard library** and Server-Sent Events: no new
+    dependency in the image; Leaflet and OpenStreetMap tiles are loaded by the
+    browser. It runs in the same image as a compose service with host
+    networking (to reach gpsd and listen on the host's loopback only).
+    State-changing requests must be JSON with a `localhost` Host header.
+17. **`init: true` in docker-compose.** Stopping a scan kills its process group;
+    the orphaned srsue/hackrf processes stayed as zombies because PID 1 was the
+    Python server. Docker's init now reaps them.
+18. **srsue's FFTW plans kept in a volume** (`srsran-home` mounted at `/root`).
+    A new container spends >15 s planning FFTs on its first srsue run, longer
+    than the `-t` timeout, so the first EARFCN of every new container failed.
+19. **Container shell with `docker compose run --rm worker`** documented as the
+    default instead of `run.sh`.
 
 ### Known limitations
 
@@ -344,7 +492,11 @@ Changes in this fork, newest last, with the reason for each.
 - `cell_search` with a HackRF remains unreliable; use `-S`.
 - `-p auto` needs LTE cells on the chosen band, and calibration on bands
   above ~1.5 GHz is ambiguous for clocks more than ~25 ppm off.
-- The first srsue run in a new container takes >15 s to start (FFTW plans).
+- `docker compose run`/`up` keep srsue's FFTW plans in the `srsran-home`
+  volume; a container started otherwise (e.g. `run.sh`) takes >15 s on its
+  first srsue run, which can make the first EARFCN time out.
+- A `sib-scan.sh` call rejected by the cell_search checks is still recorded as
+  an empty scan in `readings.sqlite`.
 
 ## License
 

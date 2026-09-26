@@ -35,9 +35,17 @@ Scan logic (driven by `vol/sib-scan.sh`):
     `get-info.py`, `get-sib.py`, `get-arfcns.py`).
   - `helpers/ue.conf` — srsue config; `helpers/lte_bands.sqlite3` — band/EARFCN table;
     `helpers/uhd_images/` — optional custom FPGA images (e.g. B210 clones).
-  - `output/` — scan results (git-ignored).
+  - `output/` — scan results (git-ignored): `cells.sqlite` (legacy, one row
+    per EARFCN) and `readings.sqlite` (tables `scans`, `readings`: every
+    reading with location, PCI, CGI, RSRP, MIB/SIBs; see `readings_db.py`).
+  - `webapp/` — local web app: `server.py` (stdlib, SSE, 127.0.0.1:8080) and
+    `static/` (index.html, app.js, style.css; Leaflet from cdnjs, OSM tiles).
+    Location: gpsd (`scripts/location.py`) > browser geolocation > manual map
+    position; effective position written to `/tmp/lte_location.json`.
 - `run.sh` — runs the built image interactively with USB/X11 access.
-- `docker-compose.yml` — builds the `worker` image.
+- `docker-compose.yml` — `worker` (shell: `docker compose run --rm worker`) and
+  `webapp` (`docker compose up webapp`, host network, `init: true`); both share
+  the image and the `srsran-home` volume (srsue FFTW wisdom in /root).
 
 ## Build & run
 
@@ -139,4 +147,9 @@ cannot be tested end-to-end without it.
    40 MSPS (20 MHz cells OK), ~1 ppm VCTCXO (ppm calibration likely
    unnecessary), separate RX/TX LOs, stock `cell_search` should work. Sweep
    mode (`-S`) is HackRF-only; keep `rx_only.patch`.
-8. Further goals: to be defined with the user.
+8. ✅ Web app (2026-09-26): run/stop, live log/status (SSE), readings table +
+   Leaflet map, location gpsd > browser > manual. Tested end to end with HackRF
+   (list mode 6200 + 1875 → PCI/CGI/TAC/RSRP/SIBs + manual location; stop during
+   calibration leaves no zombies). Browser geolocation not testable in the
+   in-app browser (denied) — check in the user's own browser.
+9. Further goals: to be defined with the user.

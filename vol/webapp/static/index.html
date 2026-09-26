@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LTE SIB Scanner</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>LTE SIB Scanner</h1>
+  <span id="state" class="badge idle">idle</span>
+  <span id="activity" class="activity"></span>
+  <span id="conn" class="conn" title="live connection to the server"></span>
+</header>
+
+<main>
+  <aside>
+    <section class="card">
+      <h2>Scan</h2>
+      <form id="scan-form">
+        <label>Mode
+          <select name="mode">
+            <option value="sweep">Sweep (HackRF)</option>
+            <option value="cell_search">cell_search</option>
+            <option value="list">EARFCN list</option>
+          </select>
+        </label>
+        <label class="for-band">Band
+          <select name="band"></select>
+        </label>
+        <label class="for-list">EARFCNs
+          <input name="earfcns" placeholder="6200 6300 6400">
+        </label>
+        <div class="row">
+          <label>Device
+            <select name="device">
+              <option value="soapy">soapy</option>
+              <option value="UHD">UHD</option>
+              <option value="bladeRF">bladeRF</option>
+            </select>
+          </label>
+          <label>Device args
+            <input name="device_args" value="driver=hackrf">
+          </label>
+        </div>
+        <div class="row">
+          <label>Gain
+            <input name="gain" type="number" value="56" min="0" max="120">
+          </label>
+          <label>Clock ppm
+            <input name="ppm" value="auto" title="auto, or a number (positive tunes higher)">
+          </label>
+        </div>
+        <div class="row">
+          <label>-t (s)
+            <input name="t" type="number" value="30" min="5">
+          </label>
+          <label>-T (s)
+            <input name="T" type="number" value="30" min="5">
+          </label>
+        </div>
+        <label class="check"><input name="recursive" type="checkbox"> Follow SIB5 neighbours</label>
+        <div class="buttons">
+          <button type="submit" id="run">Run</button>
+          <button type="button" id="stop" disabled>Stop</button>
+        </div>
+        <p id="form-error" class="error"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Location</h2>
+      <p id="loc-text" class="loc">no position yet</p>
+      <div class="buttons">
+        <button type="button" id="loc-browser">Use browser</button>
+        <button type="button" id="loc-pick">Correct on map</button>
+      </div>
+      <p class="hint" id="loc-hint">gpsd is used when it has a fix; otherwise the browser's
+        position (Wi-Fi based), which you can correct by clicking on the map.</p>
+    </section>
+
+    <section class="card log-card">
+      <h2>Activity</h2>
+      <pre id="log"></pre>
+    </section>
+  </aside>
+
+  <section class="content">
+    <div id="map"></div>
+    <div class="card table-card">
+      <div class="table-head">
+        <h2>Readings</h2>
+        <label>Scan
+          <select id="scan-filter"><option value="">all</option></select>
+        </label>
+        <span id="count" class="muted"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="readings">
+          <thead>
+            <tr>
+              <th>Time</th><th>Band</th><th>EARFCN</th><th>PCI</th><th>CGI</th><th>PLMNs</th>
+              <th>TAC</th><th>eNB</th><th>Cell</th><th>RSRP</th><th>SIBs</th><th>Location</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="detail">
+  <form method="dialog"><button class="close" aria-label="close">×</button></form>
+  <h2 id="detail-title"></h2>
+  <div id="detail-body"></div>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

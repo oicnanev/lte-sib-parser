@@ -25,8 +25,12 @@ show_help () {
   -T      after each newly decoded MIB/SIB, srsue keeps listening for
           this many seconds more; it stops earlier once all SIBs
           scheduled in SIB1 are decoded (default: 30)
-  -D      sqlite database to save results
+  -D      sqlite database to save results, one row per EARFCN
           (default: /vol/output/cells.sqlite)
+  -R      readings database: one row per cell reading with location,
+          CGI, PCI and RSRP (default: /vol/output/readings.sqlite)
+  -L      location file written by the web app (browser or map position),
+          used when gpsd has no fix (default: /tmp/lte_location.json)
 
   Usage examples
   1
@@ -67,10 +71,13 @@ containsElement () {
 PY_PATH=/vol/scripts/
 SRSUECFG=/vol/helpers/ue.conf
 SRSUELOG=/tmp/ue.log
+SRSUEOUT=/tmp/ue.out
 
 srsue_timeout=30
 srsue_timeout_add=30
 database=/vol/output/cells.sqlite
+readings_database=/vol/output/readings.sqlite
+location_file=/tmp/lte_location.json
 
 device_args=""
 device_name=""
@@ -85,7 +92,7 @@ no_requrse=0
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:?" opt; do
+while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:R:L:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -119,9 +126,21 @@ while getopts "s:e:b:a:d:g:r:p:t:T:hq:SnD:?" opt; do
       ;;
     D)  database=$OPTARG
       ;;
+    R)  readings_database=$OPTARG
+      ;;
+    L)  location_file=$OPTARG
+      ;;
   esac
 done
 
+
+# register the scan first, so a scan stopped during calibration or sweep is recorded too
+ppm_arg=()
+[[ $ppm != "auto" ]] && ppm_arg=(--ppm "$ppm")
+scan_id=$(python3 $PY_PATH/readings_db.py -d "$readings_database" new-scan \
+            ${band:+--band "$band"} "${ppm_arg[@]}" --args "$*")
+echo "scan id: $scan_id"
+trap 'python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"' EXIT
 
 if [[ $ppm == "auto" ]]; then
   if [[ -z $band ]]; then
@@ -135,6 +154,7 @@ if [[ $ppm == "auto" ]]; then
     exit 1
   fi
   echo "frequency correction: $ppm ppm"
+  python3 $PY_PATH/readings_db.py -d "$readings_database" set-ppm "$scan_id" "$ppm"
 fi
 
 if [[ $do_sweep -ne 0 ]]; then
@@ -259,7 +279,7 @@ while true; do
 
         "srsue")
             echo "[srsue] connecting to $earfcn"
-            rm /tmp/ue.log -f
+            rm -f $SRSUELOG $SRSUEOUT
             dl_freq=$(python3 $PY_PATH/earfcn_to_freq.py $earfcn)
             freq_offset=$(python3 -c "print(round($dl_freq * $ppm * 1e-6))")
 			      srsue $SRSUECFG --log.filename $SRSUELOG \
@@ -269,11 +289,12 @@ while true; do
                             --rf.rx_gain "$rx_gain" \
                             "${srate_args[@]}" \
                             --rf.freq_offset "$freq_offset" \
-                            --rat.eutra.dl_earfcn "$earfcn" 1>/dev/null &
+                            --rat.eutra.dl_earfcn "$earfcn" 1>$SRSUEOUT &
             pid=$(pidof srsue)
             # here we need to parse /tmp/ue.log to get SIB's from it
             # next we need to add earfcn's from SIB5 (if found) to earfcn_need_scan, if they already not in earfcn_scanned
-            python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database"
+            python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database" \
+                -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUEOUT"
             kill -9 $pid 2>/dev/null
 			      tail --pid=$pid -f /dev/null 2>/dev/null
             earfcn_scanned+=($earfcn)

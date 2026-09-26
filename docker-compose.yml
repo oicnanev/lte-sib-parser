@@ -1,24 +1,47 @@
+x-sdr: &sdr
+  build: ./worker/
+  image: lte-sib-parser-worker
+  privileged: true
+  # reap orphaned children (srsue, hackrf_*) when a scan is stopped
+  init: true
+  cap_add:
+    - SYS_NICE
+  devices:
+    - "/dev/bus"
+  volumes:
+    - /dev/serial:/dev/serial:ro
+    - /dev/bus/usb:/dev/bus/usb:ro
+    - ./vol:/vol
+    # srsue saves its FFTW plans in ~/.srsran_fftwisdom: keep them, a fresh
+    # container otherwise spends >15 s planning FFTs on its first srsue run
+    - srsran-home:/root
+  ulimits:
+    nofile:
+      soft: 65535
+      hard: 65535
+    nice:
+      soft: 0
+      hard: 0
+    memlock:
+      soft: -1
+      hard: -1
+  restart: 'no'
+
 services:
+  # interactive shell: docker compose run --rm worker
   worker:
-    build: ./worker/
+    <<: *sdr
     stdin_open: true
-    privileged: true
-    cap_add:
-      - SYS_NICE
-    devices:
-      - "/dev/bus"
-    volumes:
-      - /dev/serial:/dev/serial:ro
-      - /dev/bus/usb:/dev/bus/usb:ro
-      - ./vol:/vol
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
-      nice:
-        soft: 0
-        hard: 0
-      memlock:
-        soft: -1
-        hard: -1
-    restart: 'no'
+
+  # web app on http://localhost:8080: docker compose up webapp
+  # host network: reaches gpsd on the host and listens on the host's 127.0.0.1 only
+  webapp:
+    <<: *sdr
+    network_mode: host
+    entrypoint:
+      - bash
+      - -c
+      - cp /vol/helpers/uhd_images/*.bin /usr/share/uhd/images/ 2>/dev/null || true; exec python3 -u /vol/webapp/server.py --host 127.0.0.1 --port 8080
+
+volumes:
+  srsran-home:
