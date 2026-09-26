@@ -331,7 +331,8 @@ Changes in this fork, newest last, with the reason for each.
     is not an integer multiple).
 11. **Repository hygiene**: `vol/output/cells.sqlite` is no longer tracked
     (scan results reveal where the scan was made); obsolete `version:` key
-    removed from `docker-compose.yml`; `-d`/`-D` typo fixed in an example.
+    removed from `docker-compose.yml`; `-d`/`-D` typo fixed in an example;
+    Python `__pycache__/` ignored.
 
 ### Known limitations
 

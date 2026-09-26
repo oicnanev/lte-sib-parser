@@ -2,3 +2,4 @@ srsRAN_4G/
 vol/output/*
 !vol/output/.gitkeep
 .vscode
+__pycache__/
