@@ -583,7 +583,7 @@ Changes in this fork, newest last, with the reason for each.
 11. **Repository hygiene**: `vol/output/cells.sqlite` is no longer tracked
     (scan results reveal where the scan was made); obsolete `version:` key
     removed from `docker-compose.yml`; `-d`/`-D` typo fixed in an example;
-    Python `__pycache__/` ignored.
+    Python `__pycache__/` ignored; `notes/` ignored (private working notes).
 12. **`run.sh` no longer runs `xhost +`.** It disabled X server access control
     for every client (local and remote) until `xhost -`, only so a GUI in the
     container could open windows, which the scan never does. If a GUI is

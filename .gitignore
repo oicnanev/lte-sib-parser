@@ -3,3 +3,4 @@ vol/output/*
 !vol/output/.gitkeep
 .vscode
 __pycache__/
+notes/
