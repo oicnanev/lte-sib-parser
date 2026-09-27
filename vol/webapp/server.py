@@ -51,7 +51,7 @@ EARFCN_LISTS = os.path.join(VOL, "helpers", "earfcns")
 LOG_LINES = 500
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
+                ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 
 
 class Hub:
@@ -627,6 +627,8 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path
         if path == "/":
             path = "/static/index.html"
+        elif path == "/favicon.ico":  # browsers ask for it at the root
+            path = "/static/favicon.ico"
         if path.startswith("/static/"):
             name = os.path.normpath(path[len("/static/"):])
             full = os.path.join(STATIC, name)

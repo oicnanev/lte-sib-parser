@@ -184,4 +184,6 @@ cannot be tested end-to-end without it.
     Never screenshot real data for the repo.
 15. ✅ portugal.txt cross-checked with portugaltowers.eu/espetro (community-measured
     carrier centres): identical for B20/B8/B3/B1/B7; added B28 9359, 9468 (21 EARFCNs).
-16. Further goals: to be defined with the user.
+16. ✅ Favicon (static/favicon.svg, favicon-16.svg, favicon.ico; /favicon.ico route) and
+    header logo; readings table sortable by header (saved in localStorage).
+17. Further goals: to be defined with the user.

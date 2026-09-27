@@ -214,14 +214,70 @@ $("#loc-pick").onclick = () => setPicking(!picking);
 
 // ---------- readings table ----------
 
+// sort keys of the readings table headers (data-sort); empty values always go last
+const SORT_KEYS = {
+  time: (r) => r.time,
+  band: (r) => (r.band != null ? Number(r.band) : null),
+  freq: (r) => r.dl_freq_mhz,
+  bw: (r) => r.bandwidth_mhz,
+  earfcn: (r) => r.earfcn,
+  pci: (r) => r.pci,
+  cgi: (r) => r.cgi,
+  plmns: (r) => r.plmns,
+  tac: (r) => r.tac,
+  enb: (r) => r.enb_id,
+  cell: (r) => r.cell_id,
+  rsrp: (r) => r.rsrp,
+  sibs: (r) => (r.detection === "pss" ? -1 : r.sibs.length + (r.has_mib ? 1 : 0)),
+  location: (r) => (r.location_source != null ? `${r.location_source} ${r.lat}` : null),
+};
+// first click on a column: newest / strongest / most complete first, otherwise ascending
+const DESC_FIRST = new Set(["time", "rsrp", "sibs"]);
+let sortBy = { key: "time", dir: "desc" };
+try {
+  const saved = JSON.parse(localStorage.getItem("readingsSort") || "null");
+  if (saved && SORT_KEYS[saved.key] && (saved.dir === "asc" || saved.dir === "desc")) sortBy = saved;
+} catch (e) {}
+
+function compareReadings(a, b) {
+  const get = SORT_KEYS[sortBy.key];
+  const va = get(a), vb = get(b);
+  if (va == null && vb == null) return b.id - a.id;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  const c = typeof va === "string" ? va.localeCompare(vb, undefined, { numeric: true }) : va - vb;
+  return (sortBy.dir === "asc" ? c : -c) || b.id - a.id;
+}
+
+function showSortHeaders() {
+  for (const th of document.querySelectorAll("#readings th[data-sort]")) {
+    const on = th.dataset.sort === sortBy.key;
+    th.classList.toggle("sort-asc", on && sortBy.dir === "asc");
+    th.classList.toggle("sort-desc", on && sortBy.dir === "desc");
+    th.setAttribute("aria-sort", on ? (sortBy.dir === "asc" ? "ascending" : "descending") : "none");
+  }
+}
+
+document.querySelector("#readings thead").onclick = (e) => {
+  const th = e.target.closest("th[data-sort]");
+  if (!th) return;
+  const key = th.dataset.sort;
+  sortBy = sortBy.key === key
+    ? { key, dir: sortBy.dir === "asc" ? "desc" : "asc" }
+    : { key, dir: DESC_FIRST.has(key) ? "desc" : "asc" };
+  try { localStorage.setItem("readingsSort", JSON.stringify(sortBy)); } catch (e) {}
+  renderTable();
+};
+
 function filteredReadings() {
   const sid = $("#scan-filter").value;
-  const all = [...readings.values()].sort((a, b) => b.id - a.id);
+  const all = [...readings.values()];
   return sid ? all.filter((r) => String(r.scan_id) === sid) : all;
 }
 
 function renderTable(freshId) {
-  const rows = filteredReadings().map((r) => {
+  showSortHeaders();
+  const rows = filteredReadings().sort(compareReadings).map((r) => {
     const loc = r.lat != null ? `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)} (${esc(r.location_source)})` : "";
     const sibs = r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
     const time = new Date(r.time).toLocaleString();

@@ -310,7 +310,8 @@ keeps it (e.g. `http://localhost:8080/?view=38.708,-9.137,17`), and
   list of cells.
 - **Readings table**: time, band, downlink frequency, bandwidth, EARFCN, PCI,
   CGI, PLMNs, TAC, eNB ID, cell ID, RSRP, decoded SIBs (or *detected only*) and
-  location, updated live; filter by scan; click a row
+  location, updated live. Click a column header to sort by it, click again to
+  reverse (▲/▼); empty values always go last and the choice is remembered; filter by scan; click a row
   for every field and the full MIB/SIB contents.
 
 Only one scan runs at a time (the SDR can't be shared). The server is
@@ -711,6 +712,14 @@ Changes in this fork, newest last, with the reason for each.
     nationally for those bands; B28's two carriers (9359, 9468) were missing
     and were added even though they showed no LTE sync here (probably 5G NR),
     because checking an EARFCN costs ~2 s.
+33. **Favicon and sortable table.** `vol/webapp/static/favicon.svg` (antenna
+    mast with radio waves) is the tab icon and the header logo;
+    `favicon.ico` (16–64 px, served at `/favicon.ico` as browsers expect) was
+    made with `rsvg-convert` and ImageMagick, its 16 px image from the simpler
+    `favicon-16.svg` because the full drawing blurs at that size. Sorting is
+    done in the page (every reading is already there); on a first click, time,
+    RSRP and SIBs sort descending (newest, strongest, most complete first),
+    the other columns ascending.
 
 ### Known limitations
 
