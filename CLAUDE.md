@@ -186,4 +186,21 @@ cannot be tested end-to-end without it.
     carrier centres): identical for B20/B8/B3/B1/B7; added B28 9359, 9468 (21 EARFCNs).
 16. ✅ Favicon (static/favicon.svg, favicon-16.svg, favicon.ico; /favicon.ico route) and
     header logo; readings table sortable by header (saved in localStorage).
-17. Further goals: to be defined with the user.
+17. Planned after the bladeRF works alone — **multi-SDR parallel scan**:
+    - detect SDRs at start (`SoapySDRUtil --find`, serials) → capabilities:
+      bladeRF x40 max 20 MHz cells, ~1 ppm; HackRF max 10 MHz, ~20 ppm (calibrate
+      each), gain 56/70.
+    - one PSS/SSS check pass (captures via SoapySDR, not hackrf_transfer —
+      needed for bladeRF anyway), then a work queue: 20 MHz EARFCNs only to the
+      bladeRF; ≤10 MHz to the first free SDR; no bladeRF → current behaviour.
+    - one srsue per SDR (device serial, own log/stdout paths, own ppm/gain).
+    - Python orchestrator; keep sib-scan.sh for single-SDR use.
+    - Limits: HackRF is USB 2.0 and all USB 2.0 devices share ~480 Mbit/s → two
+      HackRFs decoding at once likely overflow (bladeRF x40 is USB 3.0);
+      realistic set = bladeRF + 1 HackRF. CPU: 1-2 cores per srsue (more at
+      20 MHz), 8 cores total.
+    - Expected: srsue phase (~4 of ~5.5 min) split → ~2.5-3 min per Portugal run
+      (estimate, to measure).
+18. Android cell scanner idea (notes/android-cell-scanner-guide.md, not in git):
+    on hold by the user's decision (2026-09-27).
+19. Further goals: to be defined with the user.
