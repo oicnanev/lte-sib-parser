@@ -18,7 +18,19 @@ RUN apt update && apt install -y --no-install-recommends \
     libzmq3-dev libboost-system-dev libboost-test-dev libboost-thread-dev \
     g++ make pkg-config libpython2-dev swig libi2c-dev \
     libboost-program-options-dev libconfig++-dev libusb-1.0-0-dev swig \
+    # libbladeRF build deps
+    libcurl4-openssl-dev libedit-dev libncurses-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# libbladeRF from source: the Ubuntu 22.04 and Nuand PPA packages (2.4.1) predate
+# bladeRF 2.0 firmware v2.6.0 / FPGA v0.16.0, whose RX metadata they mishandle.
+# Release 2025.10 = libbladeRF 2.6.0, matching that firmware and FPGA. The FPGA
+# image is loaded from the board's flash, so no bitstream is installed here.
+RUN git clone --depth 1 --branch 2025.10 https://github.com/Nuand/bladeRF.git /tmp/bladeRF && \
+    cd /tmp/bladeRF && git submodule update --init --depth 1 && \
+    mkdir host/build && cd host/build && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DBUILD_DOCUMENTATION=OFF .. && \
+    make -j`nproc` && make install && ldconfig && rm -rf /tmp/bladeRF
 
 
 ENV UHD_IMAGES_DIR=/usr/share/uhd/images/
@@ -30,7 +42,7 @@ RUN git clone https://github.com/srsran/srsRAN_4G
 
 #COPY ./srsRAN_4G /srsRAN_4G
 
-COPY sib_logger.patch rx_only.patch cell_search_ppm.patch /srsRAN_4G/
+COPY sib_logger.patch rx_only.patch cell_search_ppm.patch bladerf_rx.patch /srsRAN_4G/
 
 WORKDIR /srsRAN_4G/
 
@@ -38,9 +50,11 @@ WORKDIR /srsRAN_4G/
 # rx_only.patch: srsue never transmits and never retunes the LO for TX
 # (required for half-duplex SDRs like HackRF, which share one LO)
 # cell_search_ppm.patch: adds -p <ppm> frequency correction to cell_search
-RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && git apply sib_logger.patch rx_only.patch cell_search_ppm.patch && \
+# bladerf_rx.patch: bladeRF plugin reads RX continuously, without metadata
+RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && \
+    git apply sib_logger.patch rx_only.patch cell_search_ppm.patch bladerf_rx.patch && \
     mkdir build && cd build && \
-    cmake -DUSE_LTE_RATES=ON ../ && make -j`nproc` cell_search srsue && make install && \
+    cmake -DUSE_LTE_RATES=ON ../ && make -j`nproc` cell_search srsue srsran_rf_blade && make install && \
     ldconfig
 
 RUN cp /srsRAN_4G/build/lib/examples/cell_search /usr/bin/

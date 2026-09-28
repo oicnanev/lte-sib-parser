@@ -529,7 +529,9 @@ def known_job(p, filename):
     """one sib-scan.sh -K run over the known EARFCNs"""
     earfcns, wide = known_earfcns(filename)
     args = ["-K", " ".join(map(str, earfcns))]
-    if wide:
+    # 20 MHz cells only need skipping on SDRs that cannot follow them (HackRF);
+    # a bladeRF (61.44 MSPS) decodes them
+    if wide and p.get("device") != "bladeRF":
         args += ["-W", " ".join(map(str, wide))]
     gain, gain_high = number(p, "gain"), number(p, "gain_high")
     if gain is not None:

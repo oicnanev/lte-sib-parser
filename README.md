@@ -47,7 +47,8 @@ change is listed in
 | HackRF One | tested in this fork (B20, B3) | `-d soapy -a "driver=hackrf"`, see [HackRF usage](#hackrf-usage) |
 | RTL-SDR | not usable for SIBs | ≤2.4 MSPS: not enough for any LTE cell's SIBs |
 | USRP (and B210 clones) | should work (srsRAN supports it) | see [USRP clones](#usrp-clones) |
-| bladeRF | should work (srsRAN supports it) | the native srsRAN bladeRF plugin is not built in the image yet |
+| bladeRF 2.0 micro | tested in this fork (xA5, firmware v2.6.0, FPGA v0.16.0) | `-d bladeRF`, decodes 20 MHz cells, see [bladeRF usage](#bladerf-usage) |
+| bladeRF (1st gen, x40/x115) | should work (same srsRAN plugin) | not tested |
 
 ## Installation
 
@@ -472,6 +473,38 @@ a HackRF, 20 MHz cells. It has no RSRP, CGI or SIBs. Columns added later
 sqlite3 vol/output/readings.sqlite "SELECT time, earfcn, pci, cgi, rsrp, lat, lon FROM readings"
 ```
 
+## bladeRF usage
+
+A bladeRF 2.0 micro (AD9361, 12-bit, up to 61.44 MSPS, 47 MHz–6 GHz) goes
+through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
+
+```bash
+./sib-scan.sh -K "$(grep -o '^[0-9]*' helpers/earfcns/portugal.txt)" -p auto -d bladeRF -g 30 -G 40 -t 45
+```
+
+- **20 MHz cells are decoded** (30.72 MSPS), so no `-W` list: in the web app,
+  choose device *bladeRF* (device args empty) and the known-EARFCN preset
+  sends 20 MHz carriers to srsue too.
+- **Clock**: factory-calibrated VCTCXO, measured at ~1 ppm (0.8 kHz at 796 MHz,
+  2.5 kHz at 2.6 GHz), within srsRAN's tolerance. `-p auto` still works.
+- **Gain**: much lower than a HackRF's; 30 on B20/B8 and 40 on B3/B1/B7 worked
+  where the signal is strong, 40 already saturated on B20 there (MIB SNR 1.9 dB
+  at 40, 11.9 dB at 30).
+- **Antenna on RX1**: srsRAN and the checks use channel RX1. A 1.4 GHz antenna
+  there gave much weaker B3/B7 detections than a wideband one.
+- The PSS/SSS checks capture with `bladeRF-cli`, which must switch the AGC off
+  before a manual gain is accepted.
+- Sweep mode (`-S`) uses `hackrf_sweep` and stays HackRF-only; use `-K`.
+- **Use `-t 45`**: srsue takes ~10 s longer to start on a bladeRF, and with
+  `-t 30` some cells that decode fine by hand (B3 1875, B7 2800) ran out of
+  time in a full run.
+
+Measured (known-EARFCN list, 21 EARFCNs, `-g 30 -G 40 -t 30`, strong-signal
+site): 5:45 in total; 14 EARFCNs had a cell and **11 were fully decoded,
+including six 20 MHz cells** (B3 1815/1835, B1 2120.3/2140/2160, B7 2640),
+which a HackRF can only record as detected. The RSRP a bladeRF reports is not
+calibrated to the HackRF's: compare values within one SDR only.
+
 ## LimeSDR usage
 
 For LimeSDR devices use `-d soapy` to avoid a long search for UHD devices:
@@ -517,7 +550,7 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/calibrate_ppm.py -b <band>` | HackRF clock error in ppm, measured on real cells |
 | `vol/scripts/lte_pss.py` | PSS/SSS search on raw IQ (library used by the two above) |
 | `vol/scripts/earfcn_to_freq.py <earfcn>` | EARFCN → downlink frequency in Hz |
-| `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages |
+| `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages (`DEV=bladeRF ARGS= SECS=25` for a bladeRF) |
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
 | `vol/webapp/server.py` | the web app (`--port`, `--db` readings database, `--learned` learned-EARFCN file) |
@@ -720,6 +753,24 @@ Changes in this fork, newest last, with the reason for each.
     done in the page (every reading is already there); on a first click, time,
     RSRP and SIBs sort descending (newest, strongest, most complete first),
     the other columns ascending.
+34. **bladeRF 2.0 micro support.** The board (xA5, firmware v2.6.0, FPGA v0.16.0
+    — the current Nuand release 2025.10) did not work with the Ubuntu 22.04 or
+    Nuand PPA libbladeRF (2.4.1): srsue reported constant overruns and never
+    found a cell. The image now builds libbladeRF 2.6.0 (tag 2025.10) from
+    source. With it srsue found the cell and decoded the MIB but never the SIBs:
+    the srsRAN plugin read `SC16_Q11_META` samples with
+    `BLADERF_META_FLAG_RX_NOW` on every call, which dropped samples buffered
+    between calls (e.g. 9380 of 15360 valid), and every overrun made srsue
+    re-sync the SFN ("Detected overflow, trying to resync SFN"), so the cell
+    was never camped long enough for SIB1. `worker/bladerf_rx.patch` reads RX
+    as a continuous `SC16_Q11` stream and counts samples for the RX time (TX
+    uses the same format, as libbladeRF requires, and never transmits). Result:
+    SIB1 + all SIs on 10 MHz cells and on a 20 MHz B1 cell (PRB 100, 30.72 MSPS).
+    The SoapyBladeRF path was tried as an alternative and found no cell.
+35. **PSS/SSS checks with a bladeRF** (`lte_pss.configure`, `check_earfcns.py
+    --sdr bladerf --gain`): captures with `bladeRF-cli` (AGC off, manual gain,
+    SC16 Q11). The same 15 EARFCNs took 63 s and 14 had a cell (SSS 0.5–0.99),
+    against ~9 with SSS 0.3–0.6 on the HackRF at another place.
 
 ### Known limitations
 

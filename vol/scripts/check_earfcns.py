@@ -18,6 +18,9 @@ parser.add_argument("-e", "--earfcns", required=True, help="EARFCNs separated by
 parser.add_argument("-p", "--ppm", default="auto",
                     help="clock correction in ppm (positive tunes higher), or auto to measure it")
 parser.add_argument("--wide", default="", help="EARFCNs known to be too wide for the SDR")
+parser.add_argument("--sdr", choices=["hackrf", "bladerf"], default="hackrf",
+                    help="SDR used for the captures")
+parser.add_argument("--gain", type=int, default=30, help="bladeRF RX gain in dB")
 parser.add_argument("-l", "--lna", type=int, default=32)
 parser.add_argument("-g", "--vga", type=int, default=20)
 parser.add_argument("-d", "--database", default="/vol/helpers/lte_bands.sqlite3")
@@ -26,6 +29,7 @@ parser.add_argument("--scan-id", type=int)
 parser.add_argument("--location-file")
 parser.add_argument("-v", "--verbose", action="store_true")
 args = parser.parse_args()
+lte_pss.configure(args.sdr, args.gain)
 
 
 def numbers(text):

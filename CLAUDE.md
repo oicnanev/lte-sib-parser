@@ -78,6 +78,14 @@ cannot be tested end-to-end without it.
   Max 20 MSPS → SIB decoding works for cells up to 10 MHz (15.36 MSPS with
   `lte_sample_rates`); 15/20 MHz cells only show up in the sweep.
   8-bit ADC → gain tuning matters.
+- **bladeRF 2.0 micro xA5** (at the user's workplace, 2026-09-28): serial
+  51ba89f7…, firmware v2.6.0 / FPGA v0.16.0 (= Nuand release 2025.10, latest;
+  FPGA autoloads from flash), USB 3. Used with `-d bladeRF` (native srsRAN
+  plugin, needs libbladeRF 2.6.0 from source + `worker/bladerf_rx.patch`).
+  Clock ~1 ppm. Gain 30 (B20/B8) / 40 (B3/B1/B7) where signal is strong; 40
+  saturates B20 there. Antenna must be on **RX1** (wideband one; a 1.4 GHz
+  antenna there hurt B3/B7). Decodes 20 MHz cells (EARFCN 500, PRB 100).
+  AGC is on by default: `bladeRF-cli` needs `set agc rx off` before `set gain`.
 - RTL-SDR (RTL2838): only useful for `cell_search`/MIB (≤2.4 MSPS, ≤1.75 GHz).
   DVB kernel modules are blacklisted on the host.
 - Host: Arch Linux; bands of interest: B20, B8, B3, B1, B7.
@@ -143,12 +151,15 @@ cannot be tested end-to-end without it.
 5. ✅ Speed: `-T` is now an idle timeout (last new MIB/SIB + T) and the early
    stop works (RSRP was never marked received) → ~70 s per cell instead of ~3 min.
 6. ✅ README: HackRF section, TX note.
-7. **Mon 2026-09-28: bladeRF (1st gen, x40/x115 likely) test.** Needs
-   `libbladerf-dev` + FPGA image (e.g. `bladerf-fpga-hostedx40/x115`) in the
-   image so srsRAN builds its native blade RF plugin. Expect: 12-bit ADC,
-   40 MSPS (20 MHz cells OK), ~1 ppm VCTCXO (ppm calibration likely
-   unnecessary), separate RX/TX LOs, stock `cell_search` should work. Sweep
-   mode (`-S`) is HackRF-only; keep `rx_only.patch`.
+7. ✅ 2026-09-28: bladeRF 2.0 micro xA5 works (it was not a 1st-gen board).
+   Ubuntu/PPA libbladeRF 2.4.1 → constant overruns; libbladeRF 2.6.0 built
+   from source (tag 2025.10) → MIB but no SIBs, because srsRAN's plugin read
+   META samples with RX_NOW each call and dropped samples → srsue re-synced SFN
+   on every overrun. `worker/bladerf_rx.patch`: continuous SC16_Q11 RX, sample
+   counting, TX same format. SoapyBladeRF path found no cell (not used).
+   `lte_pss.configure(sdr="bladerf")` + `check_earfcns.py --sdr bladerf
+   --gain` capture with bladeRF-cli; sib-scan picks it for `-d bladeRF`;
+   web app skips `-W` for device bladeRF. Sweep mode stays HackRF-only.
 8. ✅ Web app (2026-09-26): run/stop, live log/status (SSE), readings table +
    Leaflet map, location gpsd > browser > manual. Tested end to end with HackRF
    (list mode 6200 + 1875 → PCI/CGI/TAC/RSRP/SIBs + manual location; stop during

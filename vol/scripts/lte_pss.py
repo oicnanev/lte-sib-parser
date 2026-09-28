@@ -17,21 +17,49 @@ N_FFT = int(FS_SEARCH / 15e3)
 PSS_ROOTS = [25, 29, 34]
 
 
-def capture(freq_hz, ms=40, lna=32, vga=20):
-    """Record ms milliseconds at freq_hz with hackrf_transfer, return complex samples"""
-    n = int(FS * ms / 1000)
+# SDR used for captures: "hackrf" (hackrf_transfer, lna/vga gains) or "bladerf"
+# (bladeRF-cli, manual gain BLADERF_GAIN dB). Set with configure() or LTE_SDR.
+SDR = os.environ.get("LTE_SDR", "hackrf")
+BLADERF_GAIN = int(os.environ.get("LTE_BLADERF_GAIN", "30"))
+
+
+def configure(sdr=None, gain=None):
+    global SDR, BLADERF_GAIN
+    if sdr:
+        SDR = sdr
+    if gain is not None:
+        BLADERF_GAIN = int(gain)
+
+
+def _capture_raw(freq_hz, n, lna, vga):
+    """n complex samples at FS as a float array, from the configured SDR"""
     fd, path = tempfile.mkstemp(suffix=".iq")
     os.close(fd)
     try:
-        subprocess.run(
-            ["hackrf_transfer", "-r", path, "-f", str(int(freq_hz)), "-s", str(int(FS)),
-             "-n", str(n), "-l", str(lna), "-g", str(vga)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
-        )
-        raw = np.fromfile(path, dtype=np.int8).astype(np.float32)
+        if SDR == "bladerf":
+            # AGC is on by default on the bladeRF 2.0 and blocks manual gain
+            cmd = ("set frequency rx %d; set samplerate rx %d; set bandwidth rx %d; "
+                   "set agc rx off; set gain rx %d; rx config file=%s format=bin n=%d; "
+                   "rx start; rx wait" % (freq_hz, FS, FS * 0.78, BLADERF_GAIN, path, n))
+            subprocess.run(["bladeRF-cli", "-e", cmd],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            raw = np.fromfile(path, dtype=np.int16).astype(np.float32)  # SC16 Q11
+        else:
+            subprocess.run(
+                ["hackrf_transfer", "-r", path, "-f", str(int(freq_hz)), "-s", str(int(FS)),
+                 "-n", str(n), "-l", str(lna), "-g", str(vga)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+            )
+            raw = np.fromfile(path, dtype=np.int8).astype(np.float32)
     finally:
         os.unlink(path)
-    x = raw[0::2] + 1j * raw[1::2]
+    return raw[0::2] + 1j * raw[1::2]
+
+
+def capture(freq_hz, ms=40, lna=32, vga=20):
+    """Record ms milliseconds at freq_hz with the configured SDR, return complex
+    samples filtered and decimated to FS_SEARCH"""
+    x = _capture_raw(freq_hz, int(FS * ms / 1000), lna, vga)
     # drop the first 10 ms (tuning transient), remove the DC offset
     x = x[int(FS * 0.01):]
     x = x - x.mean()

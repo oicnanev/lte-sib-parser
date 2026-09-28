@@ -372,7 +372,11 @@ while true; do
 
         "check_known")
             echo "checking EARFCNs for cells: ${earfcn_to_check[*]}"
-            check_out=$(python3 $PY_PATH/check_earfcns.py -v -e "${earfcn_to_check[*]}" -p "$ppm" \
+            check_sdr=(--sdr hackrf)
+            if [[ ${device_name,,} == "bladerf" || ${device_args,,} == *driver=bladerf* ]]; then
+              check_sdr=(--sdr bladerf --gain "$rx_gain")
+            fi
+            check_out=$(python3 $PY_PATH/check_earfcns.py -v -e "${earfcn_to_check[*]}" -p "$ppm" "${check_sdr[@]}" \
                           --wide "$wide_list" --readings-db "$readings_database" --scan-id "$scan_id" \
                           --location-file "$location_file")
             earfcn_checked+=("${earfcn_to_check[@]}")
