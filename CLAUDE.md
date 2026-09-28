@@ -228,4 +228,7 @@ cannot be tested end-to-end without it.
     Kept: multi-instance-safe sib-scan (per-PID log files, pid=$!), -n honoured
     in -K, LTE_HACKRF_LOW_GAIN. HackRF clock here ~16.5-17 ppm (varies with
     temperature). Recommendation: bladeRF alone.
-21. Further goals: to be defined with the user.
+21. ✅ Web app SDR selector (HackRF/bladeRF/Other) with defaults for the Cisco
+    antennas the user always uses; README "Gain and antennas" explains other
+    antennas/places need other values and how to measure them.
+22. Further goals: to be defined with the user.

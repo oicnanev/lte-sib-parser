@@ -306,7 +306,8 @@ Open <http://localhost:8080>. It shows:
   clock ppm (`auto` or a number), timeouts, SIB5 neighbours; **Run** / **Stop**.
   The **SDR** selector (HackRF One, bladeRF 2.0, Other) fills in device, device
   args, gains, `-t`/`-T` and the HackRF capture gain with the values measured
-  for that SDR; every field stays editable and the choice is remembered.
+  for that SDR with a Cisco LTE antenna (see [Gain and antennas](#gain-and-antennas));
+  every field stays editable and the choice is remembered.
   The band can also be a preset or a custom list, see [Several bands](#several-bands).
 - **Activity**: current task and EARFCN, and the scan's live output.
 - **Stopwatch** in the header: elapsed time of the run and of the current band
@@ -528,6 +529,48 @@ site): 5:45 in total; 14 EARFCNs had a cell and **11 were fully decoded,
 including six 20 MHz cells** (B3 1815/1835, B1 2120.3/2140/2160, B7 2640),
 which a HackRF can only record as detected. The RSRP a bladeRF reports is not
 calibrated to the HackRF's: compare values within one SDR only.
+
+## Gain and antennas
+
+The web app's SDR defaults (and the values in this README) were measured with a
+**Cisco 4G-LTE-ANTM-D** LTE dipole on the SDR's RX input, at a site with strong
+signals. **Another antenna, another place or another SDR unit needs other
+values**: gain is the setting that most often decides whether a cell decodes.
+
+Measured so far:
+
+| SDR | Antenna, place | srsue gain < 1 GHz / ≥ 1 GHz | PSS/SSS capture gain | `-t` |
+|---|---|---|---|---|
+| HackRF One | stock telescopic, home (weaker signals) | 56 / 70 | 32,20 (default) | 30 |
+| HackRF One | Cisco 4G-LTE-ANTM-D, work (strong) | 44 / 56 | 24,16 below 1 GHz | 30 |
+| bladeRF 2.0 micro | generic wideband, work | 30 / 40 | 30 | 45 |
+| bladeRF 2.0 micro | Cisco 4G-LTE-ANTM-D, work | 15 / 40 | same as srsue gain | 45 |
+
+Signs that the gain is wrong:
+
+- **Too high** (strong signal saturates the ADC or overloads the front end):
+  cells are found but the MIB decodes with a low SNR (e.g. `snr=1.6 dB` in
+  srsue's log) and SIBs rarely follow; PSS/SSS scores drop on the strongest
+  carriers (a HackRF at 32,20 gave SSS 0.12 on B20 with the Cisco antenna);
+  with a bladeRF, `bladeRF-cli` captures near full scale (±2048). Lower bands
+  usually saturate first: a good antenna adds more there (+17.6 dB on B20 for
+  the Cisco over the stock antenna, about the same on B3/B7).
+- **Too low**: no cell found or PSS peaks near 1–2 (noise), weak cells missing.
+
+How to find the values for a new setup (inside the container):
+
+```bash
+# PSS/SSS on a few known EARFCNs, one low and one high band at a time
+python3 scripts/check_earfcns.py -v --sdr bladerf --gain 20 -e "6200 3625"
+python3 scripts/check_earfcns.py -v --sdr hackrf -l 24 -g 16 -e "6200 3625"
+# srsue on one cell: look at "MIB decoded ... snr=" and the number of SIs
+DEV=bladeRF ARGS= SECS=25 helpers/srsue-debug.sh 6200 15
+helpers/srsue-debug.sh 6200 44 --rf.freq_offset 16000     # HackRF: pass its clock offset
+```
+
+Aim for an MIB SNR of roughly 8 dB or more and all SIBs within ~15 s, then
+put the values in the web app's form (or edit `SDR_DEFAULTS` in
+`vol/webapp/static/app.js` to make them the defaults).
 
 ## LimeSDR usage
 
