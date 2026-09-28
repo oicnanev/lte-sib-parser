@@ -59,6 +59,13 @@ RUN git checkout ec29b0c1ff79cebcbe66caa6d6b90778261c42b8 && \
 
 RUN cp /srsRAN_4G/build/lib/examples/cell_search /usr/bin/
 
+# lte_sib_decoder: MIB/SIB decoder on libsrsran's PHY, replaces srsue in the scans
+COPY sib_decoder/lte_sib_decoder.cc /srsRAN_4G/sib_decoder/
+RUN g++ -O2 -std=c++14 -I/usr/local/include -I/srsRAN_4G/build/lib/include \
+      /srsRAN_4G/sib_decoder/lte_sib_decoder.cc -o /usr/bin/lte_sib_decoder -L/usr/local/lib \
+      -Wl,--start-group -lrrc_asn1 -lasn1_utils -lsrsran_phy -lsrsran_common -lsrslog -Wl,--end-group \
+      -lsrsran_rf -lfftw3f -lmbedcrypto -lpthread -lm
+
 RUN mkdir /vol/
 
 WORKDIR /vol

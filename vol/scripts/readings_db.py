@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS readings (
     cgi TEXT,                       -- MCC-MNC-ECI of the first PLMN
     rsrp REAL,                      -- dBm
     bandwidth_mhz REAL,             -- from the MIB, or estimated by the sweep
-    detection TEXT,                 -- srsue (decoded) or pss (sync signals only)
+    detection TEXT,                 -- srsue or decoder (decoded), pss (sync signals only)
     lat REAL,
     lon REAL,
     accuracy_m REAL,

@@ -256,7 +256,12 @@ cannot be tested end-to-end without it.
        cells, 15 min; 2nd run 9:10. After the fix (image rebuilt): 13/13 cells
        with SIB1 incl. 5× 20 MHz, 9:37, gain 15/40. ✅ VM works with bladeRF.
        Next: re-measure bladeRF success rate on the x86 laptop; HackRF in VM.
-    b. **Direct MIB/SIB decoder instead of srsue**: srsue is a whole UE (~9 s
+    b. ✅ 2026-09-28 night: **`lte_sib_decoder`** (worker/sib_decoder/, built in the
+       image, README decision 48). Default for -d bladeRF in sib-scan (coproc,
+       SDR opened once, closed for bladeRF-cli checks; -U = srsue, -X elsewhere).
+       Portugal preset via web app in the VM: 2:32, 14/14 cells with CGI (srsue
+       9:37). Open: soft combining for low-SNR cells (3475), HackRF untested.
+       Original plan: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1
        with SI-RNTI): PSS/SSS → PBCH/MIB → PCFICH/PDCCH (SI-RNTI) → PDSCH → SIB1 and

@@ -7,6 +7,10 @@ show_help () {
   -a      device args (example: "rxant=LNAW")
   -g      rx gain (default: 30)
   -G      rx gain for EARFCNs at 1 GHz and above (default: same as -g)
+  -X      decode MIB/SIBs with lte_sib_decoder instead of srsue (default
+          with -d bladeRF): the SDR is opened once per scan and each carrier
+          takes ~1-3 s instead of ~25 s
+  -U      use srsue even with -d bladeRF
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (the ratio to the cell's sample rate must be an integer).
           Default with -d bladeRF: 30.72e6 (sample-rate changes take ~4 s
@@ -38,6 +42,7 @@ show_help () {
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
   -t      seconds srsue gets to decode anything (MIB) on an EARFCN
+          (-t/-T apply to srsue only; lte_sib_decoder has its own limits)
           (default: 30)
   -T      after each newly decoded MIB/SIB, srsue keeps listening for
           this many seconds more; it stops earlier once all SIBs
@@ -85,6 +90,35 @@ containsElement () {
   return 1
 }
 
+# lte_sib_decoder runs as a coprocess for the whole scan: opening a bladeRF 2.0
+# takes ~7 s, decoding one carrier ~1-3 s. It is closed while something else
+# needs the SDR (the PSS/SSS checks with bladeRF-cli) and reopened afterwards.
+DEC_PID=""
+dec_start () {
+  [[ -n $DEC_PID ]] && kill -0 $DEC_PID 2>/dev/null && return 0
+  coproc DEC { exec lte_sib_decoder -s -d "$device_name" -a "$device_args" "${dec_srate[@]}" 2>&1; }
+  DEC_PID=$DEC_PID
+  local line
+  while read -r -t 60 -u "${DEC[0]}" line; do
+    echo "$line"
+    [[ $line == ready* ]] && return 0
+    [[ $line == error* ]] && break
+  done
+  echo "lte_sib_decoder did not start"
+  dec_stop
+  return 1
+}
+dec_stop () {
+  [[ -z $DEC_PID ]] && return
+  local pid=$DEC_PID
+  eval "exec ${DEC[1]}>&-" 2>/dev/null  # EOF on its stdin: it closes the SDR and exits
+  for _ in $(seq 10); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+  kill -INT $pid 2>/dev/null
+  for _ in $(seq 10); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+  kill -9 $pid 2>/dev/null
+  DEC_PID=""
+}
+
 # stop srsue. In a VM, kill -9 while srsue streams from a USB SDR made the
 # hypervisor's USB passthrough drop the device (QEMU on macOS: "disconnected
 # (fatal IO error)"), so there srsue gets SIGINT and closes the SDR itself
@@ -118,6 +152,7 @@ known_list=""
 wide_list=""
 srate_args=()
 ppm="0"
+use_decoder=""
 
 do_cellsearch=1
 do_sweep=0
@@ -131,7 +166,7 @@ no_requrse=0
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XU?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -181,6 +216,10 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:?" opt; do
       ;;
     L)  location_file=$OPTARG
       ;;
+    X)  use_decoder=1
+      ;;
+    U)  use_decoder=0
+      ;;
   esac
 done
 
@@ -200,7 +239,7 @@ ppm_arg=()
 scan_id=$(python3 $PY_PATH/readings_db.py -d "$readings_database" new-scan \
             ${band:+--band "$band"} "${ppm_arg[@]}" --args "$*")
 echo "scan id: $scan_id"
-trap 'python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"; rm -f $SRSUELOG $SRSUEOUT' EXIT
+trap 'dec_stop; python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"; rm -f $SRSUELOG $SRSUEOUT' EXIT
 
 if [[ $ppm == "auto" && -z $known_list ]]; then
   if [[ -z $band ]]; then
@@ -291,6 +330,17 @@ fi
 if [[ ${#srate_args[@]} -eq 0 && ${device_name,,} == "bladerf" ]]; then
   srate_args=(--rf.srate 30.72e6)
 fi
+# the decoder decimates in software like srsue: same fixed rate
+dec_srate=()
+[[ ${#srate_args[@]} -ne 0 ]] && dec_srate=(-r "${srate_args[1]}")
+if [[ -z $use_decoder ]]; then
+  use_decoder=0
+  [[ ${device_name,,} == "bladerf" ]] && use_decoder=1
+fi
+if [[ $use_decoder -eq 1 ]] && ! command -v lte_sib_decoder >/dev/null; then
+  echo "lte_sib_decoder not installed (rebuild the image): using srsue"
+  use_decoder=0
+fi
 
 # retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined
 if [[ -z $retries ]]; then
@@ -302,7 +352,7 @@ fi
 
 # srsue's FFTW plans: computed once per machine and saved (see fftw-warmup.sh);
 # without them srsue can't start within the per-cell timeout on a new machine
-/vol/helpers/fftw-warmup.sh "$SRSUECFG"
+[[ $use_decoder -eq 0 ]] && /vol/helpers/fftw-warmup.sh "$SRSUECFG"
 
 task=$initial_task
 while true; do
@@ -373,7 +423,6 @@ while true; do
             continue ;;
 
         "srsue")
-            echo "[srsue] connecting to $earfcn"
             rm -f $SRSUELOG $SRSUEOUT
             dl_freq=$(python3 $PY_PATH/earfcn_to_freq.py $earfcn)
             freq_offset=$(python3 -c "print(round($dl_freq * $ppm * 1e-6))")
@@ -381,21 +430,33 @@ while true; do
             if [[ -n $rx_gain_high && $dl_freq -ge 1000000000 ]]; then
               gain=$rx_gain_high
             fi
-			      srsue $SRSUECFG --log.filename $SRSUELOG \
-                            --expert.lte_sample_rates=true \
-                            --rf.device_name "$device_name" \
-                            --rf.device_args "$device_args" \
-                            --rf.rx_gain "$gain" \
-                            "${srate_args[@]}" \
-                            --rf.freq_offset "$freq_offset" \
-                            --rat.eutra.dl_earfcn "$earfcn" 1>$SRSUEOUT &
-            pid=$!  # this instance's srsue (pidof would also match another SDR's)
-            # here we need to parse /tmp/ue.log to get SIB's from it
-            # next we need to add earfcn's from SIB5 (if found) to earfcn_need_scan, if they already not in earfcn_scanned
-            python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database" \
-                -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUEOUT"
-            stop_srsue $pid
-			      tail --pid=$pid -f /dev/null 2>/dev/null
+            if [[ $use_decoder -eq 1 ]] && dec_start; then
+              echo "[decoder] connecting to $earfcn"
+              echo "$earfcn $gain $freq_offset $SRSUELOG" >&"${DEC[1]}"
+              while read -r -t 120 -u "${DEC[0]}" line; do
+                echo "$line"
+                [[ $line == "done $earfcn "* ]] && break
+              done
+              # the log is complete: parse_save_sib stops at its "[decoder] done" line
+              python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t 30 -T 30 -e "$earfcn" -d "$database" \
+                  -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUELOG" --detection decoder
+            else
+              echo "[srsue] connecting to $earfcn"
+              srsue $SRSUECFG --log.filename $SRSUELOG \
+                              --expert.lte_sample_rates=true \
+                              --rf.device_name "$device_name" \
+                              --rf.device_args "$device_args" \
+                              --rf.rx_gain "$gain" \
+                              "${srate_args[@]}" \
+                              --rf.freq_offset "$freq_offset" \
+                              --rat.eutra.dl_earfcn "$earfcn" 1>$SRSUEOUT &
+              pid=$!  # this instance's srsue (pidof would also match another SDR's)
+              # parse the srsue log for MIB/SIBs; SIB5 neighbours are queued below
+              python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database" \
+                  -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUEOUT"
+              stop_srsue $pid
+              tail --pid=$pid -f /dev/null 2>/dev/null
+            fi
             earfcn_scanned+=($earfcn)
             # decoded in this scan? (cells.sqlite would also count earlier scans)
             if python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; then
@@ -437,6 +498,7 @@ while true; do
             continue ;;
 
         "check_known")
+            dec_stop  # the checks capture with bladeRF-cli, which needs the SDR
             echo "checking EARFCNs for cells: ${earfcn_to_check[*]}"
             check_sdr=(--sdr hackrf)
             if [[ ${device_name,,} == "bladerf" || ${device_args,,} == *driver=bladerf* ]]; then

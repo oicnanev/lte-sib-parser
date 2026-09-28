@@ -325,7 +325,8 @@ async function showDetail(id) {
     ["PLMNs", r.plmns], ["TAC", r.tac], ["ECI", r.eci], ["eNB ID", r.enb_id], ["Cell ID", r.cell_id],
     ["RSRP", r.rsrp != null ? r.rsrp + " dBm" : ""],
     ["Bandwidth", r.bandwidth_mhz != null ? r.bandwidth_mhz + " MHz" : ""],
-    ["Detection", r.detection === "pss" ? "PSS/SSS only (not decoded: too wide for this SDR)" : "decoded by srsue"],
+    ["Detection", r.detection === "pss" ? "PSS/SSS only (not decoded: too wide for this SDR)"
+      : r.detection === "decoder" ? "decoded by lte_sib_decoder" : "decoded by srsue"],
     ["Location", r.lat != null ? `${r.lat}, ${r.lon}` : ""],
     ["Accuracy", r.accuracy_m != null ? Math.round(r.accuracy_m) + " m" : ""],
     ["Location source", r.location_source], ["Location time", r.location_time],

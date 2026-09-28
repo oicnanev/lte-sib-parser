@@ -501,6 +501,9 @@ through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
 ./sib-scan.sh -K "$(grep -o '^[0-9]*' helpers/earfcns/portugal.txt)" -p auto -d bladeRF -g 30 -G 40 -t 45
 ```
 
+- **MIB/SIBs are decoded by `lte_sib_decoder`**, not srsue (decision 48): the
+  bladeRF is opened once per scan (~8 s) and each carrier takes ~1-3 s. `-U`
+  goes back to srsue; srsue's `-t`/`-T` do not apply to the decoder.
 - **20 MHz cells are decoded** (30.72 MSPS), so no `-W` list: in the web app,
   choose device *bladeRF* (device args empty) and the known-EARFCN preset
   sends 20 MHz carriers to srsue too.
@@ -620,6 +623,7 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/calibrate_ppm.py -b <band>` | HackRF clock error in ppm, measured on real cells |
 | `vol/scripts/lte_pss.py` | PSS/SSS search on raw IQ (library used by the two above) |
 | `vol/scripts/earfcn_to_freq.py <earfcn>` | EARFCN → downlink frequency in Hz |
+| `lte_sib_decoder -e <earfcn> -d bladeRF -r 30.72e6 -g <gain> [-v]` | (in the image) decode one carrier's MIB/SIBs without srsue; `-s` reads "earfcn gain offset_hz logfile" lines on stdin (how `sib-scan.sh` uses it), `-v` shows the cell search and SI decoding |
 | `vol/helpers/fftw-warmup.sh [ue.conf]` | compute and save srsue's FFTW plans without an SDR (`sib-scan.sh` runs it at start; ~1 s once saved) |
 | `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages (`DEV=bladeRF ARGS= SECS=25` for a bladeRF) |
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
@@ -978,6 +982,42 @@ Changes in this fork, newest last, with the reason for each.
     SIB1 (5 of them 20 MHz), in 9:37; before the fix 6 of 13 in 15:06. The
     same small buffers were used natively and may explain
     part of the random srsue failures with a bladeRF there (decision 36).
+
+48. **`lte_sib_decoder` instead of srsue (bladeRF).** srsue is a whole UE: ~9 s
+    to start per cell (plus ~7 s to open a bladeRF), then it camps and collects
+    SIBs at its own pace. `worker/sib_decoder/lte_sib_decoder.cc` uses
+    libsrsran's PHY directly, as `pdsch_ue` does: PSS/SSS search and PBCH at
+    1.92 MSPS, then `ue_sync` + `ue_dl` at the cell's rate with SI-RNTI in the
+    subframes that can carry SIB1 and SI messages, ASN.1 decoding with srsRAN's
+    RRC library. It writes the same `Content:`/`powermeasure`/`Found Cell` lines
+    as srsue, so `parse_save_sib.py` and the databases are unchanged; a final
+    `[decoder] done` line ends each carrier's log. `sib-scan.sh` runs it as a
+    coprocess for the whole scan (`-s`: one "earfcn gain offset log" line per
+    carrier), so the SDR is opened once; it is closed while `bladeRF-cli` does
+    the PSS/SSS checks. Measured on the bladeRF in the arm64 VM:
+
+    | | srsue | lte_sib_decoder |
+    |---|---|---|
+    | open the bladeRF | per cell (~7 s) | once per scan (8.3 s) |
+    | one carrier, MIB to all SIBs | ~25-60 s | 0.4-3 s (up to ~10 s on weak cells) |
+    | Portugal preset (web app) | 9:37, 13 cells with SIB1 | **2:32, 14 cells with SIB1** |
+
+    Details that mattered: candidates of the cell search are only accepted
+    once their PBCH decodes (a false PSS/SSS hit at PSR ~3 otherwise blocked the
+    carrier); srsue's receiver settings are needed (channel-estimator filter,
+    CFO from the reference signals fed back to `ue_sync`, 8 turbo iterations:
+    with the fields left at zero the SNR fell to ~1 dB within seconds); SI
+    messages sent with DCI 1C carry no redundancy version and ue_dl applies
+    SIB1's formula to them, so the four RVs are tried; a PBCH read every 32
+    frames and a subframe-continuity check keep the SFN right after lost
+    samples; `ue_sync` is reset when "subframe 0" carries no PBCH (a wrong SSS
+    decision stays wrong while tracking). Readings get `detection = decoder`.
+    Some cells also send SIB24 (NR neighbours), which srsue never reported;
+    `parse_save_sib.py` used to crash on it (no such column in `cells.sqlite`)
+    and lose the rest of the carrier's SIBs.
+    Default with `-d bladeRF` (`-X` elsewhere, untested with a HackRF; `-U`
+    for srsue). Not yet: soft combining of SI retransmissions, which would help
+    low-SNR cells (B8 3475 at ~4 dB often gives SIB1 only).
 
 ### Known limitations
 

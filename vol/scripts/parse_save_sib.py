@@ -91,6 +91,7 @@ class Reading:
             self.id = readings_db.create_reading(
                 self.conn, self.scan_id, earfcn, str(earfcn_to_band(earfcn)),
                 earfcn_to_freq_mhz(earfcn), location.current(self.location_file),
+                detection=detection,
             )
         self.pending.update(fields)
         readings_db.update_reading(self.conn, self.id, **self.pending)
@@ -210,6 +211,10 @@ if "-I" in sys.argv:
 if "-L" in sys.argv:
     location_file = sys.argv[sys.argv.index("-L") + 1]
 stdout_file = "/tmp/ue.out"
+# which program wrote the log: srsue or decoder (lte_sib_decoder)
+detection = "srsue"
+if "--detection" in sys.argv:
+    detection = sys.argv[sys.argv.index("--detection") + 1]
 # SIB1 is sent every 80 ms: once the MIB is in, it normally follows within 1-2 s.
 # Without it after this long, the cell is not going to decode on this attempt.
 sib1_wait = 10
@@ -267,6 +272,8 @@ while True:
     line = read_line(log, timeout)
     if not line:
         break
+    if "[decoder] done" in line:
+        break  # lte_sib_decoder finished this carrier: the log is complete
 
     msgs = get_json(line)
     if not msgs:
@@ -341,7 +348,9 @@ while True:
                             print(json.dumps(out), flush=True)
 
                             timeout = time.time() + timeout_add
-                            if database:
+                            # cells.sqlite has columns sib1..sib13 only (SIB24, NR
+                            # neighbours, is sent by some cells and has none)
+                            if database and sibType in readings_db.SIBS:
                                 write_db(database, earfcn, sibType, json.dumps(info))
                             if sibType in readings_db.SIBS:
                                 reading.set(**{sibType: json.dumps(info)})
