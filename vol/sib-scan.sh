@@ -29,6 +29,9 @@ show_help () {
           clock is measured in the same pass. Example: -K "6200 1875 2800"
   -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
           a HackRF): saved as detection-only readings, no srsue
+  -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
+          decoded nothing; retries run at the end of the scan
+          (default: 1 with -K, or -S with numpy; 0 otherwise)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -103,13 +106,16 @@ ppm="0"
 do_cellsearch=1
 do_sweep=0
 exclude_mhz=""
+retries=""
+retry_queue=()
+declare -A tries
 skip_wide=(--skip-wide)
 no_requrse=0
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:nD:R:L:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -144,6 +150,8 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:nD:R:L:?" opt; do
     x)  exclude_mhz=$OPTARG
       ;;
     w)  skip_wide=()
+      ;;
+    y)  retries=$OPTARG
       ;;
     n)  no_requrse=1
       ;;
@@ -252,6 +260,14 @@ if  [[ $do_cellsearch -ne 0 ]] &&
 fi
 
 
+# retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined
+if [[ -z $retries ]]; then
+  retries=0
+  if [[ -n $known_list || ${#refine[@]} -ne 0 ]]; then
+    retries=1
+  fi
+fi
+
 task=$initial_task
 while true; do
     echo
@@ -291,6 +307,12 @@ while true; do
             if [[ ${#earfcn_need_scan[@]} -eq 0 ]]; then
                 if [[ ${#earfcn_to_check[@]} -ne 0 ]]; then
                   task="check_known"
+                elif [[ ${#retry_queue[@]} -ne 0 ]]; then
+                  # confirmed cells srsue missed: try again, at the end of the scan
+                  earfcn=${retry_queue[0]}
+                  retry_queue=("${retry_queue[@]:1}")
+                  echo "retrying $earfcn (attempt $(( ${tries[$earfcn]} + 1 )))"
+                  task="srsue"
                 elif [[ $do_cellsearch -eq 0 ]]; then
                   task="exit"
                 else
@@ -339,9 +361,14 @@ while true; do
             kill -9 $pid 2>/dev/null
 			      tail --pid=$pid -f /dev/null 2>/dev/null
             earfcn_scanned+=($earfcn)
-            # carrier found: skip the neighbouring raster candidates of the same carrier
-            if python3 $PY_PATH/has_mib.py -d "$database" "$earfcn"; then
+            # decoded in this scan? (cells.sqlite would also count earlier scans)
+            if python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; then
+                # carrier found: skip the neighbouring raster candidates of the same carrier
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
+            elif [[ ${tries[$earfcn]:-0} -lt $retries ]]; then
+                tries[$earfcn]=$(( ${tries[$earfcn]:-0} + 1 ))
+                echo "nothing decoded on $earfcn: will retry at the end"
+                retry_queue+=($earfcn)
             fi
 
             if [[ -n $known_list ]]; then

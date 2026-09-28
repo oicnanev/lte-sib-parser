@@ -258,6 +258,7 @@ STATUS_RES = [
     (re.compile(r"^scan id: (\d+)"), lambda m: {"scan_id": int(m.group(1))}),
     (re.compile(r"^task: (\S+)"), lambda m: {"task": m.group(1)}),
     (re.compile(r"^\[srsue\] connecting to (\d+)"), lambda m: {"task": "srsue", "earfcn": int(m.group(1))}),
+    (re.compile(r"^retrying (\d+)"), lambda m: {"task": "srsue retry", "earfcn": int(m.group(1))}),
     (re.compile(r"^frequency correction: ([-\d.]+) ppm"), lambda m: {"ppm": float(m.group(1))}),
     (re.compile(r"^calibrating"), lambda m: {"task": "calibrating"}),
     (re.compile(r"^sweeping band"), lambda m: {"task": "sweeping"}),

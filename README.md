@@ -208,6 +208,9 @@ usage: sib-scan.sh [OPTION]...
           clock is measured in the same pass. Example: -K "6200 1875 2800"
   -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
           a HackRF): saved as detection-only readings, no srsue
+  -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
+          decoded nothing; retries run at the end of the scan
+          (default: 1 with -K, or -S with numpy; 0 otherwise)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q "1300 1301 1302 1303"
   -n      no reqursive scan, do no scan cells from sib5
@@ -246,7 +249,12 @@ For each EARFCN, srsue runs until one of these happens:
   SIB1 schedules. This is the usual case for a good cell (~1 minute).
 
 The total time per EARFCN is therefore at most about `-t` + (number of SIBs ×
-`-T`), but in practice it ends as soon as the SIB list is complete. SIBs are
+`-T`), but in practice it ends as soon as the SIB list is complete.
+
+When PSS/SSS has confirmed a cell on an EARFCN (`-K`, or `-S` with numpy) and
+srsue decodes nothing there, the EARFCN is tried once more at the end of the
+scan (`-y` sets the number of retries). A failed attempt costs `-t` plus srsue's
+start-up (~10–15 s). SIBs are
 repeated every 80 ms to a few seconds, so `-T 30` leaves room for decoding
 errors; lower it to scan faster at the risk of missing a rarely sent SIB.
 
@@ -771,6 +779,17 @@ Changes in this fork, newest last, with the reason for each.
     --sdr bladerf --gain`): captures with `bladeRF-cli` (AGC off, manual gain,
     SC16 Q11). The same 15 EARFCNs took 63 s and 14 had a cell (SSS 0.5–0.99),
     against ~9 with SSS 0.3–0.6 on the HackRF at another place.
+
+36. **srsue retries for confirmed cells** (`-y`, default 1 with `-K`/`-S`).
+    In two bladeRF runs of the known-EARFCN list, PSS/SSS found 14 and 15
+    cells but srsue decoded 11 and 9: it failed on different cells each time
+    (1700/1875/2800 in one run, 6200/3475/300/… in the other, some with SSS
+    0.87), so the failures are random, not tied to a cell or band. A failed
+    EARFCN is queued again for the end of the scan; success is judged from
+    this scan's rows in `readings.sqlite`, since `cells.sqlite` keeps MIBs of
+    earlier scans and made the old neighbour-skip check (which now uses the
+    same test) count them too. Only confirmed cells are retried: in `-q` mode
+    there is no confirmation and a retry could be a wasted `-t`.
 
 ### Known limitations
 

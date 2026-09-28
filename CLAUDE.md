@@ -214,4 +214,8 @@ cannot be tested end-to-end without it.
       (estimate, to measure).
 18. Android cell scanner idea (notes/android-cell-scanner-guide.md, not in git):
     on hold by the user's decision (2026-09-27).
-19. Further goals: to be defined with the user.
+19. ✅ srsue retries (`sib-scan.sh -y`, default 1 with -K/-S): failed confirmed
+    EARFCNs are retried at the end; success = MIB in this scan's readings
+    (`has_mib.py -R db -I scan_id`). bladeRF runs: srsue decodes ~60-80% of
+    confirmed cells per attempt, failures random.
+20. Further goals: to be defined with the user.
