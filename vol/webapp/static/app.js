@@ -10,6 +10,7 @@ let gpsdActive = false;
 let picking = false;
 let geoWatch = null;
 let lastSentGeo = null;
+let lastGeo = null; // last browser position, resent if the server lost it (restart)
 
 // ---------- theme ----------
 
@@ -193,6 +194,7 @@ function startBrowserGeo() {
   if (geoWatch != null) return;
   geoWatch = navigator.geolocation.watchPosition(async (p) => {
     const loc = { lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy };
+    lastGeo = loc;
     // send only meaningful changes
     if (lastSentGeo && metres(lastSentGeo, loc) < 5 &&
         Math.abs((lastSentGeo.accuracy || 0) - loc.accuracy) < 5) return;
@@ -431,6 +433,11 @@ function connect() {
     const d = JSON.parse(e.data);
     gpsdActive = d.gpsd;
     showLocation(d.location);
+    // the server restarted and has no position: give it the browser's again
+    if (!d.location && lastGeo && geoWatch != null) {
+      lastSentGeo = lastGeo;
+      api("/api/location", { ...lastGeo, source: "browser" }).catch(() => {});
+    }
   });
   es.addEventListener("reading", (e) => {
     const r = JSON.parse(e.data);

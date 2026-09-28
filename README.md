@@ -791,6 +791,12 @@ Changes in this fork, newest last, with the reason for each.
     same test) count them too. Only confirmed cells are retried: in `-q` mode
     there is no confirmation and a retry could be a wasted `-t`.
 
+37. **Browser position resent after a server restart.** The page only sends
+    the browser's position when it moves 5 m or its accuracy changes, so after
+    a server restart (e.g. `systemctl restart`) the server had no position and
+    readings were saved without one until the user moved or reloaded the page.
+    The page now resends its last position when the server reports none.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
