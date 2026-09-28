@@ -402,7 +402,7 @@ dec_srate=()
 # retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined
 if [[ -z $retries ]]; then
   retries=0
-  if [[ -n $known_list || ${#refine[@]} -ne 0 ]]; then
+  if [[ -n $known_list || ${#refine[@]} -ne 0 || $wide_scan -eq 1 ]]; then
     retries=1
   fi
 fi
@@ -519,10 +519,11 @@ while true; do
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
             fi
             # success means SIB1 (the cell identity), not just the MIB
-            # (without the PSS/SSS pre-check, only where a cell was found: MIB)
+            # (with the decoder only where a cell was found, i.e. a MIB: it already
+            # acquired up to 4 times, and an empty EARFCN costs ~5 s per try)
             if ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" --sib1 "$earfcn" &&
                [[ ${tries[$earfcn]:-0} -lt $retries ]] &&
-               { [[ $direct_known -eq 0 ]] || python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; }; then
+               { [[ $use_decoder -eq 0 ]] || python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; }; then
                 tries[$earfcn]=$(( ${tries[$earfcn]:-0} + 1 ))
                 echo "no SIB1 on $earfcn: will retry at the end"
                 retry_queue+=($earfcn)
@@ -578,6 +579,13 @@ while true; do
                   rm -f "/tmp/wide.$$.$e.log"
                   earfcn_scanned+=($e)
                   found+=($e)
+                  # a 2 s capture allows one timing lock only: cells left at the MIB
+                  # or SIB1 get a live decode (up to 4 acquisitions) at the end
+                  if [[ ${BASH_REMATCH[2]} == mib || ${BASH_REMATCH[2]} == sib1 ]] && [[ $retries -gt 0 ]]; then
+                    echo "$e: ${BASH_REMATCH[2]} only from the capture, will decode it live at the end"
+                    tries[$e]=1
+                    retry_queue+=($e)
+                  fi
                 fi
                 [[ $line == "scan done"* ]] && break
               done

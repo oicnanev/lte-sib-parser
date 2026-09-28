@@ -812,35 +812,46 @@ static int probe_earfcn(rx_t& rx, int earfcn, double center, double offset, floa
   if (n <= 0) {
     return -1;
   }
-  // confirm with the PBCH (a false PSS/SSS hit does not decode)
+  // confirm with the PBCH, candidates (one per N_id_2) in PSR order: a carrier
+  // can hold two cells, and the stronger PSS is not always the one whose PBCH
+  // decodes. A 16-bit CRC over up to 40 frames x 4 SFN offsets x 3 port counts
+  // passes by chance on ~1 EARFCN in 150: a second decode must give the same MIB.
   srsran_ue_mib_sync_t ue_mib;
   if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, 1, &rx)) {
     return -1;
   }
-  srsran_cell_t cell = {};
-  cell.id            = res[best].cell_id;
-  cell.cp            = res[best].cp;
-  cell.frame_type    = res[best].frame_type;
-  srsran_ue_mib_sync_set_cell(&ue_mib, cell);
-  ue_mib.ue_sync.cfo_current_value       = res[best].cfo / 15000;
-  ue_mib.ue_sync.cfo_is_copied           = true;
-  ue_mib.ue_sync.cfo_correct_enable_find = true;
-  srsran_sync_set_cfo_cp_enable(&ue_mib.ue_sync.sfind, false, 0);
-  // a 16-bit CRC over up to 40 frames x 4 SFN offsets x 3 port counts passes by
-  // chance on ~1 EARFCN in 150: a second decode must give the same MIB
-  uint8_t  bch[SRSRAN_BCH_PAYLOAD_LEN], bch2[SRSRAN_BCH_PAYLOAD_LEN];
-  uint32_t ports2 = 0;
-  int      m      = srsran_ue_mib_sync_decode(&ue_mib, 40, bch, &cell.nof_ports, nullptr);
-  bool     ok     = false;
-  if (m == 1) {
+  int order[3] = {0, 1, 2};
+  std::sort(order, order + 3, [&](int a, int b) { return res[a].psr > res[b].psr; });
+  int pci = -1;
+  for (int k = 0; k < 3 && pci < 0; k++) {
+    const srsran_ue_cellsearch_result_t& r = res[order[k]];
+    if (r.psr <= 0 || r.mode <= 0) {
+      continue;
+    }
+    srsran_cell_t cell = {};
+    cell.id            = r.cell_id;
+    cell.cp            = r.cp;
+    cell.frame_type    = r.frame_type;
+    srsran_ue_mib_sync_set_cell(&ue_mib, cell);
     srsran_ue_sync_reset(&ue_mib.ue_sync);
-    int m2 = srsran_ue_mib_sync_decode(&ue_mib, 40, bch2, &ports2, nullptr);
-    // same bandwidth and PHICH config (the SFN bits differ, 6 bits at the start)
-    ok = m2 == 1 && ports2 == cell.nof_ports && memcmp(bch, bch2, 6) == 0;
+    ue_mib.ue_sync.cfo_current_value       = r.cfo / 15000;
+    ue_mib.ue_sync.cfo_is_copied           = true;
+    ue_mib.ue_sync.cfo_correct_enable_find = true;
+    srsran_sync_set_cfo_cp_enable(&ue_mib.ue_sync.sfind, false, 0);
+    uint8_t  bch[SRSRAN_BCH_PAYLOAD_LEN], bch2[SRSRAN_BCH_PAYLOAD_LEN];
+    uint32_t ports2 = 0;
+    if (srsran_ue_mib_sync_decode(&ue_mib, 40, bch, &cell.nof_ports, nullptr) == 1) {
+      srsran_ue_sync_reset(&ue_mib.ue_sync);
+      // same bandwidth and PHICH config (the SFN bits after them differ)
+      if (srsran_ue_mib_sync_decode(&ue_mib, 40, bch2, &ports2, nullptr) == 1 && ports2 == cell.nof_ports &&
+          memcmp(bch, bch2, 6) == 0) {
+        pci  = (int)cell.id;
+        *psr = r.psr;
+      }
+    }
   }
   srsran_ue_mib_sync_free(&ue_mib);
-  *psr = res[best].psr;
-  return ok ? (int)cell.id : -1;
+  return pci;
 }
 
 // "scan <center_hz> <seconds> <gain> <earfcn_lo> <earfcn_hi> <offset_ppm> <log_prefix> [skip_mhz...]": capture, look

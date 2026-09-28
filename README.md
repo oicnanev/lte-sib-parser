@@ -1055,6 +1055,13 @@ Changes in this fork, newest last, with the reason for each.
     holds ~50 ms; now 200 ms are dropped); and a single PBCH decode was not
     enough: its 16-bit CRC, tried over 40 frames x 4 SFN offsets x 3 antenna
     counts, passed by chance about once per band ("PCI 0" hits).
+    Later: the probe tries the PBCH of every PSS/SSS candidate in PSR order
+    (B3 1500 holds two cells, and the stronger PSS was often the one whose
+    PBCH failed: found in 3 of 4 captures instead of 1 of 3), and a cell the
+    2 s capture leaves at MIB or SIB1 gets a live decode at the end of the
+    band (up to 4 acquisitions, decision 50). With the decoder, retries only
+    happen where a MIB was decoded: SIB5 neighbours without a cell here cost
+    ~5 s once, not twice. Sweeps in a row: 16 and 15 carriers, 14 with SIB1.
     61.44 MSPS (49 MHz filter) also works over the VM's USB 3 and found all
     three 20 MHz carriers of B1 and of B3 in one capture each, but probing costs
     5-10x more per EARFCN (22-41 s per capture), so 30.72 MSPS is the default.
