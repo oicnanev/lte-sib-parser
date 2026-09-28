@@ -223,4 +223,9 @@ cannot be tested end-to-end without it.
     EARFCNs are retried at the end; success = MIB in this scan's readings
     (`has_mib.py -R db -I scan_id`). bladeRF runs: srsue decodes ~60-80% of
     confirmed cells per attempt, failures random.
-20. Further goals: to be defined with the user.
+20. ✅ Parallel bladeRF + HackRF tested (2026-09-28): slower (7:40, 11/13) than
+    bladeRF alone (5:32, 12/12) — CPU contention between two real-time srsue.
+    Kept: multi-instance-safe sib-scan (per-PID log files, pid=$!), -n honoured
+    in -K, LTE_HACKRF_LOW_GAIN. HackRF clock here ~16.5-17 ppm (varies with
+    temperature). Recommendation: bladeRF alone.
+21. Further goals: to be defined with the user.

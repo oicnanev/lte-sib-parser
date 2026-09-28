@@ -21,6 +21,9 @@ PSS_ROOTS = [25, 29, 34]
 # (bladeRF-cli, manual gain BLADERF_GAIN dB). Set with configure() or LTE_SDR.
 SDR = os.environ.get("LTE_SDR", "hackrf")
 BLADERF_GAIN = int(os.environ.get("LTE_BLADERF_GAIN", "30"))
+# HackRF capture gains below 1 GHz, "lna,vga" (e.g. "24,16"): with a good antenna
+# strong low-band carriers overload the HackRF front end at the usual 32/20
+HACKRF_LOW_GAIN = os.environ.get("LTE_HACKRF_LOW_GAIN", "")
 
 
 def configure(sdr=None, gain=None):
@@ -45,6 +48,8 @@ def _capture_raw(freq_hz, n, lna, vga):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             raw = np.fromfile(path, dtype=np.int16).astype(np.float32)  # SC16 Q11
         else:
+            if HACKRF_LOW_GAIN and freq_hz < 1e9:
+                lna, vga = (int(v) for v in HACKRF_LOW_GAIN.split(","))
             subprocess.run(
                 ["hackrf_transfer", "-r", path, "-f", str(int(freq_hz)), "-s", str(int(FS)),
                  "-n", str(n), "-l", str(lna), "-g", str(vga)],

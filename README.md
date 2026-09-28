@@ -273,7 +273,9 @@ The HackRF One works through soapy, with some limits:
 - **cell_search is unreliable** with a HackRF (see [decisions](#changes-and-design-decisions)):
   use `-S`.
 - **8-bit ADC**: gain matters. `-g 56` worked on B20 (800 MHz); B3 (1.8 GHz)
-  needed `-g 70`.
+  needed `-g 70` with the stock antenna. With a Cisco 4G-LTE-ANTM-D at a
+  strong-signal site: `-g 44 -G 56`, and `LTE_HACKRF_LOW_GAIN=24,16` for the
+  PSS/SSS captures below 1 GHz.
 
 Scan a band, calibrating the clock on the same band:
 ```bash
@@ -831,6 +833,20 @@ Changes in this fork, newest last, with the reason for each.
     a B20 cell (it had timed out or taken ~12–13 s), 10.6 s instead of 11.3 s
     on a 20 MHz B1 cell. The remaining ~9 s per cell before the search starts
     is srsue start-up (PHY init ~6.5 s), the same with a HackRF.
+
+40. **Two SDRs in parallel: tried, slower on this laptop.** bladeRF (20 MHz and
+    unknown-width EARFCNs) and HackRF (5/10 MHz EARFCNs), each with its own
+    `sib-scan.sh -K ... -n` at the same time, took 7:40 with 11 of 13 cells
+    decoded and 4 first-attempt failures, against 5:32 and 12 of 12 with the
+    bladeRF alone. The bladeRF failed only while sharing the CPU: two real-time
+    srsue instances (the bladeRF one at a fixed 30.72 MSPS) plus the parallel
+    PSS/SSS checks on an 8-core laptop starve each other. What remains from the
+    test: `sib-scan.sh` is safe to run as several instances (per-instance srsue
+    log/stdout files; it waits for its own srsue, `pidof` also matched the other
+    SDR's and killed it), `-n` now also stops the SIB5 follow-up in `-K` mode,
+    and `LTE_HACKRF_LOW_GAIN=lna,vga` sets the HackRF capture gain below 1 GHz.
+    With a Cisco 4G-LTE-ANTM-D, a HackRF needed capture gain 24/16 below 1 GHz
+    (32/20 overloaded it: SSS 0.12) and srsue gain 44 below / 56 above.
 
 ### Known limitations
 

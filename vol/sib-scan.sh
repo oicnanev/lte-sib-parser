@@ -87,8 +87,9 @@ containsElement () {
 
 PY_PATH=/vol/scripts/
 SRSUECFG=/vol/helpers/ue.conf
-SRSUELOG=/tmp/ue.log
-SRSUEOUT=/tmp/ue.out
+# per-instance files: several sib-scan.sh can run at once, one per SDR
+SRSUELOG=/tmp/ue.$$.log
+SRSUEOUT=/tmp/ue.$$.out
 
 srsue_timeout=30
 srsue_timeout_add=30
@@ -177,7 +178,7 @@ ppm_arg=()
 scan_id=$(python3 $PY_PATH/readings_db.py -d "$readings_database" new-scan \
             ${band:+--band "$band"} "${ppm_arg[@]}" --args "$*")
 echo "scan id: $scan_id"
-trap 'python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"' EXIT
+trap 'python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"; rm -f $SRSUELOG $SRSUEOUT' EXIT
 
 if [[ $ppm == "auto" && -z $known_list ]]; then
   if [[ -z $band ]]; then
@@ -362,7 +363,7 @@ while true; do
                             "${srate_args[@]}" \
                             --rf.freq_offset "$freq_offset" \
                             --rat.eutra.dl_earfcn "$earfcn" 1>$SRSUEOUT &
-            pid=$(pidof srsue)
+            pid=$!  # this instance's srsue (pidof would also match another SDR's)
             # here we need to parse /tmp/ue.log to get SIB's from it
             # next we need to add earfcn's from SIB5 (if found) to earfcn_need_scan, if they already not in earfcn_scanned
             python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database" \
@@ -380,7 +381,7 @@ while true; do
                 retry_queue+=($earfcn)
             fi
 
-            if [[ -n $known_list ]]; then
+            if [[ -n $known_list && $no_requrse -eq 0 ]]; then
               # -K: EARFCNs advertised in SIB5 are checked (cheap) before srsue
               for e in $(python3 $PY_PATH/get_neigh.py -d "$database" -e "$earfcn" 2>/dev/null); do
                 if ! containsElement $e "${earfcn_checked[@]}" && ! containsElement $e "${earfcn_to_check[@]}"; then
