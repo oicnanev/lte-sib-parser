@@ -32,7 +32,7 @@ show_help () {
   -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
           a HackRF): saved as detection-only readings, no srsue
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
-          decoded nothing; retries run at the end of the scan
+          did not decode SIB1 (the cell identity); retries run at the end
           (default: 1 with -K, or -S with numpy; 0 otherwise)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
@@ -384,9 +384,12 @@ while true; do
             if python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; then
                 # carrier found: skip the neighbouring raster candidates of the same carrier
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
-            elif [[ ${tries[$earfcn]:-0} -lt $retries ]]; then
+            fi
+            # success means SIB1 (the cell identity), not just the MIB
+            if ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" --sib1 "$earfcn" &&
+               [[ ${tries[$earfcn]:-0} -lt $retries ]]; then
                 tries[$earfcn]=$(( ${tries[$earfcn]:-0} + 1 ))
-                echo "nothing decoded on $earfcn: will retry at the end"
+                echo "no SIB1 on $earfcn: will retry at the end"
                 retry_queue+=($earfcn)
             fi
 

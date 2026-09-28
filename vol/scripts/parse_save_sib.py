@@ -80,6 +80,13 @@ class Reading:
     def set(self, **fields):
         if not self.conn:
             return
+        if self.id is None and self.scan_id is not None:
+            # a retry of this EARFCN in the same scan completes the earlier row
+            row = self.conn.execute(
+                "SELECT id FROM readings WHERE scan_id = ? AND earfcn = ? ORDER BY id DESC LIMIT 1",
+                (self.scan_id, earfcn)).fetchone()
+            if row:
+                self.id = row[0]
         if self.id is None:
             self.id = readings_db.create_reading(
                 self.conn, self.scan_id, earfcn, str(earfcn_to_band(earfcn)),
@@ -203,6 +210,11 @@ if "-I" in sys.argv:
 if "-L" in sys.argv:
     location_file = sys.argv[sys.argv.index("-L") + 1]
 stdout_file = "/tmp/ue.out"
+# SIB1 is sent every 80 ms: once the MIB is in, it normally follows within 1-2 s.
+# Without it after this long, the cell is not going to decode on this attempt.
+sib1_wait = 10
+if "--sib1-wait" in sys.argv:
+    sib1_wait = int(sys.argv[sys.argv.index("--sib1-wait") + 1])
 if "-o" in sys.argv:
     stdout_file = sys.argv[sys.argv.index("-o") + 1]
 
@@ -282,7 +294,7 @@ while True:
             out = {"type": "mib", "info": mib}
             print(json.dumps(out), flush=True)
 
-            timeout = time.time() + timeout_add
+            timeout = time.time() + (timeout_add if "sib1" in retrieved else min(timeout_add, sib1_wait))
             if database:
                 write_db(database, earfcn, "mib", json.dumps(mib))
             reading.set(mib=json.dumps(mib),

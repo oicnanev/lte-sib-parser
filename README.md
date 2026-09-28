@@ -211,7 +211,7 @@ usage: sib-scan.sh [OPTION]...
   -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
           a HackRF): saved as detection-only readings, no srsue
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
-          decoded nothing; retries run at the end of the scan
+          did not decode SIB1 (the cell identity); retries run at the end
           (default: 1 with -K, or -S with numpy; 0 otherwise)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q "1300 1301 1302 1303"
@@ -246,7 +246,9 @@ For each EARFCN, srsue runs until one of these happens:
   weak;
 - **no new MIB/SIB for `-T` seconds** (default 30): every newly decoded MIB or
   SIB restarts this countdown, so srsue keeps going while it is still making
-  progress and stops once it has been quiet for `-T` seconds;
+  progress and stops once it has been quiet for `-T` seconds; right after the
+  MIB the countdown is only 10 s until SIB1 arrives (SIB1 is sent every 80 ms,
+  so it normally follows within 1–2 s);
 - **everything expected is decoded**: RSRP, MIB, SIB1, SIB2 and every SIB that
   SIB1 schedules. This is the usual case for a good cell (~1 minute).
 
@@ -254,8 +256,9 @@ The total time per EARFCN is therefore at most about `-t` + (number of SIBs ×
 `-T`), but in practice it ends as soon as the SIB list is complete.
 
 When PSS/SSS has confirmed a cell on an EARFCN (`-K`, or `-S` with numpy) and
-srsue decodes nothing there, the EARFCN is tried once more at the end of the
-scan (`-y` sets the number of retries). A failed attempt costs `-t` plus srsue's
+srsue does not decode its SIB1 (no MIB, or a MIB without SIB1 and so without
+cell identity), the EARFCN is tried once more at the end of the scan (`-y` sets
+the number of retries); the retry completes the same reading row. A failed attempt costs `-t` plus srsue's
 start-up (~10–15 s). SIBs are
 repeated every 80 ms to a few seconds, so `-T 30` leaves room for decoding
 errors; lower it to scan faster at the risk of missing a rarely sent SIB.
@@ -910,6 +913,14 @@ Changes in this fork, newest last, with the reason for each.
     *Sweep* and selects the known-EARFCN preset, the server rejects sweep with
     any SDR but a HackRF, and `sib-scan.sh -S` refuses other devices before it
     registers a scan or calibrates.
+
+43. **Retry and time out on SIB1, not on the MIB.** A bladeRF run found 14
+    cells in 8:26: 12 complete and two (20 MHz, B1 2120.3 and B7 2680) with a MIB
+    but no SIB1, hence no CGI. Those two counted as decoded, so they were not
+    retried, and each waited the full `-T` (30 s) after the MIB for a SIB1 that
+    never came. Now the countdown after the MIB is 10 s until SIB1 arrives, a
+    retry is decided on SIB1 (`has_mib.py --sib1`), and a retry completes the
+    reading row of the first attempt instead of adding a second one.
 
 ### Known limitations
 

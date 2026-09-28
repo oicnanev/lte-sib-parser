@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Exit 0 if a MIB was decoded for the given EARFCN.
-#   has_mib.py -R <readings.sqlite> -I <scan_id> <earfcn>   in this scan (readings database)
+#   has_mib.py -R <readings.sqlite> -I <scan_id> [--sib1] <earfcn>
+#       in this scan (readings database); --sib1: SIB1 too, i.e. the cell identity
 #   has_mib.py -d <cells.sqlite> <earfcn>                    ever (legacy per-EARFCN table)
 import sqlite3
 import sys
@@ -19,8 +20,9 @@ def arg(flag, default=None):
 try:
     if "-R" in sys.argv:
         conn = sqlite3.connect(arg("-R"))
-        row = conn.execute("SELECT mib FROM readings WHERE scan_id = ? AND earfcn = ? AND mib IS NOT NULL",
-                           (int(arg("-I", "0")), earfcn)).fetchone()
+        col = "sib1" if "--sib1" in sys.argv else "mib"
+        row = conn.execute("SELECT %s FROM readings WHERE scan_id = ? AND earfcn = ? AND %s IS NOT NULL"
+                           % (col, col), (int(arg("-I", "0")), earfcn)).fetchone()
     else:
         conn = sqlite3.connect(arg("-d", "/vol/output/cells.sqlite"))
         row = conn.execute("SELECT mib FROM cells WHERE earfcn = ?;", (earfcn,)).fetchone()
