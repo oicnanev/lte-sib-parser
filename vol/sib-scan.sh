@@ -85,6 +85,19 @@ containsElement () {
   return 1
 }
 
+# stop srsue. In a VM, kill -9 while srsue streams from a USB SDR made the
+# hypervisor's USB passthrough drop the device (QEMU on macOS: "disconnected
+# (fatal IO error)"), so there srsue gets SIGINT and closes the SDR itself
+# (~5 s: it forces its exit after 5 s); natively kill -9 is instant and safe
+stop_srsue () {
+  local pid=$1
+  if grep -qiE "qemu|parallels|vmware|innotek" /sys/class/dmi/id/sys_vendor 2>/dev/null; then
+    kill -INT $pid 2>/dev/null
+    for _ in $(seq 15); do kill -0 $pid 2>/dev/null || return; sleep 1; done
+  fi
+  kill -9 $pid 2>/dev/null
+}
+
 PY_PATH=/vol/scripts/
 SRSUECFG=/vol/helpers/ue.conf
 # per-instance files: several sib-scan.sh can run at once, one per SDR
@@ -287,6 +300,10 @@ if [[ -z $retries ]]; then
   fi
 fi
 
+# srsue's FFTW plans: computed once per machine and saved (see fftw-warmup.sh);
+# without them srsue can't start within the per-cell timeout on a new machine
+/vol/helpers/fftw-warmup.sh "$SRSUECFG"
+
 task=$initial_task
 while true; do
     echo
@@ -377,7 +394,7 @@ while true; do
             # next we need to add earfcn's from SIB5 (if found) to earfcn_need_scan, if they already not in earfcn_scanned
             python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t "$srsue_timeout" -T "$srsue_timeout_add" -e "$earfcn" -d "$database" \
                 -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUEOUT"
-            kill -9 $pid 2>/dev/null
+            stop_srsue $pid
 			      tail --pid=$pid -f /dev/null 2>/dev/null
             earfcn_scanned+=($earfcn)
             # decoded in this scan? (cells.sqlite would also count earlier scans)

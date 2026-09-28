@@ -239,6 +239,16 @@ cannot be tested end-to-end without it.
        build` (arm64, srsRAN uses NEON); one srsue test per SDR counting
        overflows (bladeRF 30.72 MSPS ≈ 123 MB/s over virtual USB is the risk);
        web app binds 127.0.0.1 of the VM (browser in the VM, or add a bind option).
+       Status 2026-09-28: Ubuntu 26.04 arm64 VM (QEMU), bladeRF at 5000M, image
+       built, PSS/SSS captures fine (+0.93 ppm). srsue stuck in "Waiting PHY to
+       initialize": FFTW_MEASURE planning ~20 min on arm64, and sib-scan's
+       kill -9 meant the wisdom was never saved → `vol/helpers/fftw-warmup.sh`
+       (file RF device on /dev/zero, SIGINT once PHY is up), run by sib-scan at
+       start. With wisdom: bladeRF Found Cell 25 s, SIB1 decoded, 2 overflows/min.
+       sib-scan's kill -9 during cell search made QEMU drop the bladeRF ("fatal
+       IO error", 2/2) → stop_srsue: SIGINT in a VM (sys_vendor), -9 natively.
+       Reception at the VM's location weak (SSS 0.38, Found Cell after 44-55 s).
+       Next: confirm stop_srsue keeps the bladeRF attached, full web app scan.
     b. **Direct MIB/SIB decoder instead of srsue**: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

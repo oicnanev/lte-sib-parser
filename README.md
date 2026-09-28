@@ -620,6 +620,7 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/calibrate_ppm.py -b <band>` | HackRF clock error in ppm, measured on real cells |
 | `vol/scripts/lte_pss.py` | PSS/SSS search on raw IQ (library used by the two above) |
 | `vol/scripts/earfcn_to_freq.py <earfcn>` | EARFCN → downlink frequency in Hz |
+| `vol/helpers/fftw-warmup.sh [ue.conf]` | compute and save srsue's FFTW plans without an SDR (`sib-scan.sh` runs it at start; ~1 s once saved) |
 | `vol/helpers/srsue-debug.sh <earfcn> <gain> [srsue args]` | run srsue for 15 s with verbose logs, show sync peaks and decoded messages (`DEV=bladeRF ARGS= SECS=25` for a bladeRF) |
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
@@ -922,15 +923,41 @@ Changes in this fork, newest last, with the reason for each.
     retry is decided on SIB1 (`has_mib.py --sib1`), and a retry completes the
     reading row of the first attempt instead of adding a second one.
 
+44. **srsue's FFTW plans computed before the scan, without an SDR.** srsue
+    plans its FFTs with `FFTW_MEASURE` at start-up and saves them
+    (`~/.srsran_fftwisdom`) only when it exits, but `sib-scan.sh` stops it with
+    `kill -9`. On an ARM64 VM (Ubuntu 26.04 under QEMU on a MacBook M4,
+    bladeRF over USB 3 passthrough) planning took ~20 min, so srsue never got
+    past "Waiting PHY to initialize" before the per-cell timeout, and every
+    attempt started over.
+    `vol/helpers/fftw-warmup.sh` runs srsue with the `file` RF device reading
+    `/dev/zero` until the PHY is up, then stops it with SIGINT so it saves the
+    plans; `sib-scan.sh` calls it once at the start (~1 s when the plans exist).
+    srsue is still killed with `-9` per cell on real hardware (see 45): a
+    SIGINT costs 5 s per cell ("Couldn't stop after 5s") and the plans made
+    after the cell is found are quick. On the VM, with the plans saved, srsue found a B20 cell 25 s after
+    start with the bladeRF and decoded SIB1 with 2 overflows per minute.
+
+45. **srsue stopped with SIGINT inside a VM.** In the same VM, the bladeRF
+    vanished from the guest ("USB Device [2cf0:5250] disconnected (fatal IO
+    error)" in QEMU) right when `sib-scan.sh` killed srsue with `-9` while it
+    was still searching for the cell (twice, at the `-t` timeout), and the
+    retry failed with "Unable to open device". srsue stopped with SIGINT closes
+    the SDR itself and the device stayed. `sib-scan.sh` now sends SIGINT and
+    waits up to 15 s when `/sys/class/dmi/id/sys_vendor` names a hypervisor
+    (QEMU, Parallels, VMware, VirtualBox); natively it keeps `kill -9`, which is
+    ~5 s faster per cell.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
 - `cell_search` with a HackRF remains unreliable; use `-S`.
 - `-p auto` needs LTE cells on the chosen band, and calibration on bands
   above ~1.5 GHz is ambiguous for clocks more than ~25 ppm off.
-- `docker compose run`/`up` keep srsue's FFTW plans in the `srsran-home`
-  volume; a container started otherwise (e.g. `run.sh`) takes >15 s on its
-  first srsue run, which can make the first EARFCN time out.
+- The first `sib-scan.sh` run on a new machine, or in a container without the
+  `srsran-home` volume (e.g. `run.sh`), first computes srsue's FFTW plans:
+  a few seconds on x86, ~20 min on an ARM64 VM. `docker compose run`/`up`
+  keep them in the `srsran-home` volume.
 - A `sib-scan.sh` call rejected by the cell_search checks is still recorded as
   an empty scan in `readings.sqlite`.
 - A reading's band comes from its EARFCN; the band a cell announces in SIB1
