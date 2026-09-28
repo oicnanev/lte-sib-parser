@@ -49,6 +49,13 @@
         <label class="for-list">EARFCNs
           <input name="earfcns" placeholder="6200 6300 6400">
         </label>
+        <label title="fills in device, gains and timeouts with the values measured for that SDR (editable)">SDR
+          <select name="sdr">
+            <option value="hackrf">HackRF One</option>
+            <option value="bladerf">bladeRF 2.0</option>
+            <option value="custom">Other (set by hand)</option>
+          </select>
+        </label>
         <div class="row">
           <label>Device
             <select name="device">
@@ -69,6 +76,9 @@
             <input name="gain_high" type="number" value="70" min="0" max="120">
           </label>
         </div>
+        <label class="for-hackrf" title="HackRF lna,vga for the PSS/SSS captures below 1 GHz; 24,16 with a Cisco LTE antenna (32,20 overloaded it), empty = 32,20">Capture gain &lt; 1 GHz (HackRF)
+          <input name="hackrf_low_gain" placeholder="lna,vga e.g. 24,16">
+        </label>
         <label>Clock ppm
           <input name="ppm" value="auto" title="auto (calibrated on the lowest band), or a number (positive tunes higher)">
         </label>

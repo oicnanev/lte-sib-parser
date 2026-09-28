@@ -304,6 +304,9 @@ Open <http://localhost:8080>. It shows:
 
 - **Scan form**: mode (sweep, cell_search, EARFCN list), band, device, gain,
   clock ppm (`auto` or a number), timeouts, SIB5 neighbours; **Run** / **Stop**.
+  The **SDR** selector (HackRF One, bladeRF 2.0, Other) fills in device, device
+  args, gains, `-t`/`-T` and the HackRF capture gain with the values measured
+  for that SDR; every field stays editable and the choice is remembered.
   The band can also be a preset or a custom list, see [Several bands](#several-bands).
 - **Activity**: current task and EARFCN, and the scan's live output.
 - **Stopwatch** in the header: elapsed time of the run and of the current band
@@ -847,6 +850,14 @@ Changes in this fork, newest last, with the reason for each.
     and `LTE_HACKRF_LOW_GAIN=lna,vga` sets the HackRF capture gain below 1 GHz.
     With a Cisco 4G-LTE-ANTM-D, a HackRF needed capture gain 24/16 below 1 GHz
     (32/20 overloaded it: SSS 0.12) and srsue gain 44 below / 56 above.
+
+41. **Per-SDR defaults in the web app.** The best settings differ a lot between
+    the SDRs (gain 44/56 vs 15/40, `-t` 30 vs 45, a HackRF capture gain) and
+    were easy to get wrong. The SDR selector fills them in with the values
+    measured with a Cisco 4G-LTE-ANTM-D at a strong-signal site (with the
+    HackRF's stock antenna, 56/70 had worked at home). The HackRF capture gain
+    below 1 GHz reaches `sib-scan.sh` as `LTE_HACKRF_LOW_GAIN`; the server only
+    accepts `lna,vga` numbers.
 
 ### Known limitations
 

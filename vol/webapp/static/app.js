@@ -343,6 +343,26 @@ async function showDetail(id) {
 
 const form = $("#scan-form");
 
+// best values measured per SDR (Cisco 4G-LTE-ANTM-D antenna, strong-signal site;
+// with the HackRF's stock antenna gains were 56 / 70)
+const SDR_DEFAULTS = {
+  hackrf: { device: "soapy", device_args: "driver=hackrf", gain: 44, gain_high: 56, t: 30, T: 30, hackrf_low_gain: "24,16" },
+  bladerf: { device: "bladeRF", device_args: "", gain: 15, gain_high: 40, t: 45, T: 30, hackrf_low_gain: "" },
+};
+
+function applySdr(save) {
+  const d = SDR_DEFAULTS[form.sdr.value];
+  if (d) for (const [k, v] of Object.entries(d)) form[k].value = v;
+  document.querySelector(".for-hackrf").style.display = form.sdr.value === "bladerf" ? "none" : "";
+  if (save) try { localStorage.setItem("sdr", form.sdr.value); } catch (e) {}
+}
+form.sdr.onchange = () => applySdr(true);
+try {
+  const saved = localStorage.getItem("sdr");
+  if (saved && [...form.sdr.options].some((o) => o.value === saved)) form.sdr.value = saved;
+} catch (e) {}
+applySdr(false);
+
 function updateFormMode() {
   const mode = form.mode.value;
   document.querySelector(".for-band").style.display = mode === "list" ? "none" : "";

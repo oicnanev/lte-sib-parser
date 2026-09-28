@@ -287,7 +287,7 @@ def run_proc(proc):
     return code
 
 
-def job_thread(steps, ppm):
+def job_thread(steps, ppm, env=None):
     """run the steps (one sib-scan.sh call per band) one after another"""
     code = None
     done_mhz = []  # carriers read so far: overlapping bands (e.g. B28/B20) must not read them again
@@ -301,7 +301,7 @@ def job_thread(steps, ppm):
                        band=band, scan_id=None, task="starting", earfcn=None,
                        band_started=readings_db.now())
         hub.add_log("[webapp] ./sib-scan.sh " + " ".join(a))
-        proc = subprocess.Popen(["bash", SIB_SCAN] + a, cwd=VOL, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(["bash", SIB_SCAN] + a, cwd=VOL, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1,
                                 start_new_session=True)
         hub.proc = proc
@@ -563,10 +563,22 @@ def known_job(p, filename):
     return [(None, args)], ppm or "auto"
 
 
+def scan_env(p):
+    """environment for sib-scan.sh: HackRF capture gain below 1 GHz (lna,vga)"""
+    env = dict(os.environ)
+    low = str(p.get("hackrf_low_gain", "")).replace(" ", "")
+    if low:
+        if not re.fullmatch(r"\d{1,2},\d{1,2}", low):
+            raise BadRequest("capture gain < 1 GHz must be lna,vga, e.g. 24,16")
+        env["LTE_HACKRF_LOW_GAIN"] = low
+    return env
+
+
 def start_scan(params):
     if hub.status.get("running"):
         raise BadRequest("a scan is already running")
     steps, ppm = build_job(params)
+    env = scan_env(params)
     with hub.lock:
         hub.log.clear()
     hub.stop_requested = False
@@ -574,7 +586,7 @@ def start_scan(params):
                    band=None, step=None, started=readings_db.now(), band_started=None,
                    finished=None, exit_code=None,
                    bands=[b for b, _ in steps if b is not None])
-    threading.Thread(target=job_thread, args=(steps, ppm), daemon=True).start()
+    threading.Thread(target=job_thread, args=(steps, ppm, env), daemon=True).start()
 
 
 def stop_scan():
