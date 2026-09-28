@@ -1059,6 +1059,24 @@ Changes in this fork, newest last, with the reason for each.
     three 20 MHz carriers of B1 and of B3 in one capture each, but probing costs
     5-10x more per EARFCN (22-41 s per capture), so 30.72 MSPS is the default.
 
+50. **Decoder on weak or interfered cells: new acquisitions and soft
+    combining.** Detailed logs of the carriers that failed (B8 3475, B3 1875,
+    B7 2800) showed two kinds of attempt: good ones with ~10 dB SNR and SIB1
+    within ~0.2 s, and bad ones with 1-7 dB from the first subframe on and a
+    PCFICH (CFI) that changed every subframe, i.e. a bad timing lock from the
+    acquisition (probably another cell with the same PSS and other timing;
+    srsue has the same 60-80 % per attempt). So the decoder now waits 1.5 s
+    for SIB1 instead of 4 and acquires again, up to 4 times within 12 s per
+    carrier, also when SI messages stall after SIB1; what was decoded is kept
+    across acquisitions. It also soft-combines retransmissions like srsue's
+    MAC: SIB1's four transmissions per 80 ms and an SI message's
+    retransmissions within its SI window (computed from SIB1's
+    si-WindowLength, periodicities and order), with the 36.321 redundancy
+    versions; the four RVs on their own remain as a fallback. On six hard
+    carriers, three rounds: 15 of 18 complete (before: most rounds had several
+    carriers with MIB or SIB1 only). Portugal known-EARFCN preset: 1:22, 16
+    cells, 15 with SIB1 and 14 with every SIB (B7 2950 gives only the MIB).
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

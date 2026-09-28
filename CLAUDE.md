@@ -263,7 +263,9 @@ cannot be tested end-to-end without it.
        9:37); without the bladeRF-cli PSS pre-check (decoder searches itself,
        ppm from CFO): 1:18, 15 cells with CGI. Open: soft combining for low-SNR
        cells (3475 SIB1 only), B7 2950 (weak 20 MHz: sync lost after MIB),
-       HackRF with -X untested.
+       HackRF with -X untested. Later: soft combining + up to 4 acquisitions per
+       carrier (README 50) → preset 1:22, 16 cells, 15 CGI, 14 complete.
+       Bad attempts = bad timing lock from acquisition (SNR low from the start).
        Original plan: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

@@ -51,7 +51,9 @@ struct args_t {
   std::string dev_args    = "";
   double      hw_srate    = 0;   // 0: change the device rate per phase
   float       search_s    = 5;   // cell search + MIB
-  float       sib1_s      = 4;   // SIB1 after the MIB (sent every 80 ms)
+  float       sib1_s      = 1.5; // SIB1 after the MIB (sent every 20 ms; if the timing
+                                 // lock is good it comes within ~0.2 s)
+  float       carrier_s   = 12;  // total per carrier: new acquisitions while no SIB1
   float       si_s        = 6;   // after the last new SIB (SI periodicity up to 5.12 s)
   float       gain_offset = 62;  // srsue's phy.rx_gain_offset, so RSRP values compare
   std::string log_file    = "";
@@ -70,7 +72,7 @@ static void usage(const char* prog)
          "  -a ARGS     RF device arguments\n"
          "  -r HZ       fixed hardware sample rate, decimated in software (e.g. 30.72e6)\n"
          "  -t S        cell search + MIB time limit (default 5)\n"
-         "  -1 S        SIB1 wait after the MIB (default 4)\n"
+         "  -1 S        SIB1 wait after the MIB (default 1.5; up to 4 acquisitions per carrier)\n"
          "  -T S        wait after the last new SIB (default 6)\n"
          "  -l FILE     log file (default stdout, one-carrier mode)\n"
          "  -v          print each cell search attempt\n",
@@ -262,9 +264,12 @@ static int recv_cb(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srs
 
 /* ---- SI bookkeeping ---- */
 struct si_state_t {
-  bool          have_sib1 = false;
-  std::set<int> expected; // SIB numbers announced in SIB1 (plus SIB2)
-  std::set<int> received;
+  bool             have_sib1 = false;
+  std::set<int>    expected; // SIB numbers announced in SIB1 (plus SIB2)
+  std::set<int>    received;
+  uint32_t         win_ms = 0; // SI window length (SIB1 si-WindowLength)
+  std::vector<int> period;     // SI periodicity in frames, per SI message, in SIB1's order
+  bool             rsrp_done = false;
   bool          done() const
   {
     return have_sib1 && std::includes(received.begin(), received.end(), expected.begin(), expected.end());
@@ -294,7 +299,9 @@ static bool handle_dlsch(FILE* f, si_state_t& st, uint8_t* payload, uint32_t nby
     }
     st.have_sib1 = true;
     st.expected.insert(2);
+    st.win_ms = c1.sib_type1().si_win_len.to_number();
     for (auto& si : c1.sib_type1().sched_info_list) {
+      st.period.push_back(si.si_periodicity.to_number());
       for (auto& t : si.sib_map_info) {
         st.expected.insert(sib_number(t.to_string()));
       }
@@ -324,13 +331,32 @@ static bool handle_dlsch(FILE* f, si_state_t& st, uint8_t* payload, uint32_t nby
 }
 
 /* ---- PDSCH with SI-RNTI ----
- * Like srsran_ue_dl_find_and_decode, but when the DCI carries no redundancy
- * version (format 1C) ue_dl applies SIB1's RV formula to every SI message. The
- * RV of an SI message depends on its position in the SI window (36.321 5.3.1),
- * so here the four RVs are tried until the CRC passes.
+ * Like srsran_ue_dl_find_and_decode, plus what srsue's MAC does for BCCH:
+ * - redundancy version: from the DCI when it has one (1A); otherwise (1C) from
+ *   36.321 5.3.1: SIB1 k = (SFN/2) mod 4, SI messages k = subframe index in the
+ *   SI window mod 4, rv = ceil(3/2 k) mod 4 (ue_dl applies SIB1's formula to all)
+ * - soft combining: retransmissions of one SIB1 (80 ms period) or of one SI
+ *   message (one window) add up in the same soft buffer, which is what decodes
+ *   low-SNR cells
+ * If that fails and the DCI had no RV, the four RVs are tried on their own
+ * (another buffer), in case the window position is not what SIB1 implies.
  * Returns -1 on error, 0 without an SI-RNTI DCI, 1 with a DCI (*crc = decoded). */
-static int decode_si(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg_t* cfg, srsran_pdsch_cfg_t* pdsch,
-                     uint8_t* payload, bool search, bool is_sib1, bool* crc)
+struct combine_t {
+  srsran_softbuffer_rx_t comb, single;
+  int64_t                key = -1; // SIB1 period or SI window being combined
+  int                    tbs = -1;
+};
+
+static int decode_si(srsran_ue_dl_t*     q,
+                     srsran_dl_sf_cfg_t* sf,
+                     srsran_ue_dl_cfg_t* cfg,
+                     srsran_pdsch_cfg_t* pdsch,
+                     uint8_t*            payload,
+                     bool                search,
+                     int                 rv_hint, // -1: unknown
+                     int64_t             key,
+                     combine_t&          cb,
+                     bool*               crc)
 {
   *crc = false;
   srsran_ue_dl_set_mi_auto(q);
@@ -347,27 +373,63 @@ static int decode_si(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg
   if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci[0], &pdsch->grant) || !pdsch->grant.tb[0].enabled) {
     return 0;
   }
-  int      rvs[4] = {0, 2, 3, 1};
-  uint32_t nrv    = 4;
-  if (pdsch->grant.tb[0].rv >= 0) {
-    rvs[0] = pdsch->grant.tb[0].rv;
-    nrv    = 1;
-  } else if (is_sib1) {
-    uint32_t k = (sf->tti / 10 / 2) % 4;
-    rvs[0]     = ((uint32_t)ceilf(1.5f * k)) % 4;
-    nrv        = 1;
-  }
-  for (uint32_t i = 0; i < nrv && !*crc; i++) {
-    pdsch->grant.tb[0].rv = rvs[i];
-    srsran_softbuffer_rx_reset_tbs(pdsch->softbuffers.rx[0], (uint32_t)pdsch->grant.tb[0].tbs);
+  bool dci_rv = pdsch->grant.tb[0].rv >= 0;
+  int  rv     = dci_rv ? pdsch->grant.tb[0].rv : rv_hint;
+  int  tbs    = pdsch->grant.tb[0].tbs;
+  auto decode = [&](srsran_softbuffer_rx_t* sb, int r, bool reset) -> int {
+    pdsch->softbuffers.rx[0] = sb;
+    pdsch->grant.tb[0].rv    = r;
+    if (reset) {
+      srsran_softbuffer_rx_reset_tbs(sb, (uint32_t)tbs);
+    }
     srsran_pdsch_res_t res[SRSRAN_MAX_CODEWORDS] = {};
     res[0].payload                               = payload;
     if (srsran_ue_dl_decode_pdsch(q, sf, pdsch, res)) {
       return -1;
     }
     *crc = res[0].crc;
+    return 0;
+  };
+  if (rv >= 0) {
+    bool fresh = key != cb.key || tbs != cb.tbs;
+    cb.key     = key;
+    cb.tbs     = tbs;
+    if (decode(&cb.comb, rv, fresh) < 0) {
+      return -1;
+    }
+    if (*crc) {
+      cb.key = -1; // decoded: start over with the next transmission
+    }
+  }
+  if (!*crc && !dci_rv) {
+    const int rvs[4] = {0, 2, 3, 1};
+    for (int k = 0; k < 4 && !*crc; k++) {
+      if (rvs[k] != rv && decode(&cb.single, rvs[k], true) < 0) {
+        return -1;
+      }
+    }
   }
   return 1;
+}
+
+// SI message window containing this subframe (36.331 5.2.3): for the n-th SI
+// message of SIB1, x = n * w; the window starts in subframe x mod 10 of the frame
+// with SFN mod T = floor(x / 10) and lasts w subframes. Returns false outside
+// every window; else its index n, the subframe index i in it and its start tti.
+static bool si_window(const si_state_t& st, uint32_t tti, int* n, uint32_t* i, uint32_t* start)
+{
+  for (size_t k = 0; k < st.period.size() && st.win_ms > 0; k++) {
+    uint32_t x   = k * st.win_ms;
+    uint32_t per = st.period[k] * 10;
+    uint32_t rel = (tti + 10240 - x % per) % per;
+    if (rel < st.win_ms) {
+      *n     = (int)k;
+      *i     = rel;
+      *start = (tti + 10240 - rel) % 10240;
+      return true;
+    }
+  }
+  return false;
 }
 
 /* ---- one carrier: search, MIB, SIB1, SI messages ---- */
@@ -377,6 +439,7 @@ static const char* process_carrier(rx_t&         rx,
                                    float         gain,
                                    double        offset,
                                    FILE*         f,
+                                   si_state_t&   st, // kept across acquisitions of one carrier
                                    double        capture_center = 0)
 {
   double dl = srsran_band_fd(earfcn) * 1e6;
@@ -489,12 +552,13 @@ static const char* process_carrier(rx_t&         rx,
   srsran_ue_dl_cfg_t     dl_cfg    = {};
   srsran_dl_sf_cfg_t     sf_cfg    = {};
   srsran_pdsch_cfg_t     pdsch_cfg = {};
-  srsran_softbuffer_rx_t softbuf;
+  combine_t              cb;
   const char*            status = "mib";
   if (srsran_ue_sync_init_multi_decim(&ue_sync, cell.nof_prb, false, recv_cb, 1, &rx, 0) ||
       srsran_ue_sync_set_cell(&ue_sync, cell) || srsran_ue_mib_init(&ue_mib, sf_buf[0], cell.nof_prb) ||
       srsran_ue_mib_set_cell(&ue_mib, cell) || srsran_ue_dl_init(&ue_dl, sf_buf, cell.nof_prb, 1) ||
-      srsran_ue_dl_set_cell(&ue_dl, cell) || srsran_softbuffer_rx_init(&softbuf, cell.nof_prb)) {
+      srsran_ue_dl_set_cell(&ue_dl, cell) || srsran_softbuffer_rx_init(&cb.comb, cell.nof_prb) ||
+      srsran_softbuffer_rx_init(&cb.single, cell.nof_prb)) {
     fprintf(stderr, "Error initialising the PHY\n");
     return "error";
   }
@@ -513,26 +577,23 @@ static const char* process_carrier(rx_t&         rx,
   dl_cfg.chest_cfg.cfo_estimate_enable  = true;
   dl_cfg.chest_cfg.cfo_estimate_sf_mask = 1023;
   dl_cfg.cfg.tm                         = cell.nof_ports > 1 ? SRSRAN_TM2 : SRSRAN_TM1;
-  pdsch_cfg.softbuffers.rx[0]           = &softbuf;
   pdsch_cfg.rnti                        = SRSRAN_SIRNTI;
   pdsch_cfg.max_nof_iterations          = 8;
   pdsch_cfg.decoder_type                = SRSRAN_MIMO_DECODER_MMSE;
   pdsch_cfg.csi_enable                  = true;
 
-  si_state_t st;
   bool       have_sfn  = false;
   uint32_t   sfn       = 0;
   float      rsrp_sum  = 0;
   int        rsrp_n    = 0;
-  bool       rsrp_done = false;
-  double     deadline  = rx_clock(rx) + args.sib1_s;
+  double     deadline  = rx_clock(rx) + (st.have_sib1 ? args.si_s : args.sib1_s);
   uint32_t   n_sf = 0, n_nosync = 0, n_nosfn = 0, n_dci = 0, n_crc = 0;
   uint32_t   prev_sf   = 0;
   uint32_t   frames_since_pbch = 0;
   double     last_sync = rx_clock(rx);
   double     last_sfn  = rx_clock(rx);
   uint32_t   n_reset   = 0;
-  while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && rsrp_done)) {
+  while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && st.rsrp_done)) {
     cf_t* bufs[SRSRAN_MAX_CHANNELS] = {sf_buf[0]};
     int   n                         = srsran_ue_sync_zerocopy(&ue_sync, bufs, max_samples);
     if (n < 0) {
@@ -580,11 +641,26 @@ static const char* process_carrier(rx_t&         rx,
     }
     last_sfn = rx_clock(rx);
     // SIB1: subframe 5 of even frames; SI messages: in the other subframes
-    bool sib1_sf = sf_idx == 5 && sfn % 2 == 0;
-    bool search  = st.have_sib1 ? !sib1_sf : sib1_sf;
-    sf_cfg.tti   = sfn * 10 + sf_idx;
-    bool crc     = false;
-    int  nb      = decode_si(&ue_dl, &sf_cfg, &dl_cfg, &pdsch_cfg, data[0], search, sib1_sf, &crc);
+    bool     sib1_sf = sf_idx == 5 && sfn % 2 == 0;
+    bool     search  = st.have_sib1 ? !sib1_sf : sib1_sf;
+    uint32_t tti     = sfn * 10 + sf_idx;
+    sf_cfg.tti       = tti;
+    // redundancy version and combining key (see decode_si)
+    int     rv_hint = -1;
+    int64_t key     = -1;
+    if (sib1_sf) {
+      rv_hint = ((uint32_t)ceilf(1.5f * ((sfn / 2) % 4))) % 4;
+      key     = 100000 + sfn / 8; // one SIB1 per 80 ms
+    } else {
+      int      n;
+      uint32_t i, start;
+      if (si_window(st, tti, &n, &i, &start)) {
+        rv_hint = ((uint32_t)ceilf(1.5f * (i % 4))) % 4;
+        key     = 200000 + n * 10240 + start;
+      }
+    }
+    bool crc = false;
+    int  nb  = decode_si(&ue_dl, &sf_cfg, &dl_cfg, &pdsch_cfg, data[0], search, rv_hint, key, cb, &crc);
     if (nb < 0) {
       fprintf(stderr, "PDSCH decoding error\n");
       break;
@@ -594,21 +670,22 @@ static const char* process_carrier(rx_t&         rx,
       srsran_ue_sync_set_cfo_ref(&ue_sync, ue_dl.chest_res.cfo);
     }
     if (search) {
-      if (!rsrp_done && isnormal(ue_dl.chest_res.rsrp_dbm)) {
+      if (!st.rsrp_done && isnormal(ue_dl.chest_res.rsrp_dbm)) {
         rsrp_sum += ue_dl.chest_res.rsrp_dbm;
         if (++rsrp_n == 20) {
           char buf[64];
           snprintf(buf, sizeof(buf), "\t[powermeasure]\t[{\"rsrp\":%.1f}]",
                    rsrp_sum / rsrp_n - (gain + args.gain_offset));
           log_line(f, "PHY", buf);
-          rsrp_done = true;
+          st.rsrp_done = true;
         }
       }
       n_dci += nb > 0;
       n_crc += crc;
       if (args.verbose && (!st.have_sib1 || nb > 0)) {
-        printf("  sfn %4d sf %d: dci %d crc %s tbs %d snr %.1f dB\n", sfn, sf_idx, nb, crc ? "ok" : "--",
-               pdsch_cfg.grant.tb[0].tbs, ue_dl.chest_res.snr_db);
+        printf("  sfn %4d sf %d: dci %d crc %s tbs %d snr %.1f dB cfi %d cfo %.0f Hz ref_cfo %.0f Hz\n", sfn, sf_idx,
+               nb, crc ? "ok" : "--", pdsch_cfg.grant.tb[0].tbs, ue_dl.chest_res.snr_db, sf_cfg.cfi,
+               srsran_ue_sync_get_cfo(&ue_sync), ue_dl.chest_res.cfo * 15000);
       }
       if (crc && handle_dlsch(f, st, data[0], pdsch_cfg.grant.tb[0].tbs / 8)) {
         deadline = rx_clock(rx) + args.si_s; // something new: keep listening
@@ -629,7 +706,8 @@ static const char* process_carrier(rx_t&         rx,
   srsran_ue_dl_free(&ue_dl);
   srsran_ue_mib_free(&ue_mib);
   srsran_ue_sync_free(&ue_sync);
-  srsran_softbuffer_rx_free(&softbuf);
+  srsran_softbuffer_rx_free(&cb.comb);
+  srsran_softbuffer_rx_free(&cb.single);
   free(sf_buf[0]);
   free(data[0]);
   return status;
@@ -651,9 +729,19 @@ static const char* run_carrier(rx_t&         rx,
       return "error";
     }
   }
-  const char* status = process_carrier(rx, args, earfcn, gain, offset, f, capture_center);
-  if (strcmp(status, "mib") == 0 && !go_exit && !rx.from_buf) {
-    status = process_carrier(rx, args, earfcn, gain, offset, f); // cell there, no SIB1: once more
+  // A cell with a MIB but no SIB1 usually means a bad timing lock (low SNR from
+  // the first subframe, e.g. another cell with the same PSS): acquire again
+  // (also when the SI messages stall after SIB1); what was decoded is kept
+  si_state_t  st;
+  double      t0     = rx_clock(rx);
+  const char* status = process_carrier(rx, args, earfcn, gain, offset, f, st, capture_center);
+  for (int k = 1; k < 4 && (strcmp(status, "mib") == 0 || strcmp(status, "sib1") == 0) && !go_exit &&
+                  !rx.from_buf && rx_clock(rx) - t0 < args.carrier_s;
+       k++) {
+    const char* again = process_carrier(rx, args, earfcn, gain, offset, f, st, capture_center);
+    if (strcmp(again, "nocell") != 0 && strcmp(again, "error") != 0) {
+      status = again;
+    }
   }
   log_line(f, "DEC", std::string("[decoder] done ") + status);
   if (f != stdout) {
