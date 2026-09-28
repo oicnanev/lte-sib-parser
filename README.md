@@ -948,9 +948,20 @@ Changes in this fork, newest last, with the reason for each.
     (QEMU, Parallels, VMware, VirtualBox); natively it keeps `kill -9`, which is
     ~5 s faster per cell.
 
+46. **bladeRF at 15.36 MSPS on arm64.** In the same VM srsue found the B20 cell
+    but kept losing it (16 "Found Cell" in 60 s) and SIB1 took 30-50 s or never
+    came: its SYNC thread, which reads and decimates the fixed 30.72 MSPS, ran
+    at 97% CPU. At 15.36 MSPS it ran at 57%, srsue kept the cell and a
+    `sib-scan.sh -K` run decoded MIB and SIB1-5 in one attempt. Letting srsue
+    change the rate itself found no cell in 50 s (see the bladeRF section).
+    `sib-scan.sh` now defaults to `--rf.srate 15.36e6` for `-d bladeRF` on
+    arm64 (cells up to 10 MHz; `-r 30.72e6` forces the old rate), and the web
+    app passes 20 MHz EARFCNs as `-W` (detection only) there, as for a HackRF.
+
 ### Known limitations
 
-- 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
+- 20 MHz cells on a HackRF, or on a bladeRF on arm64, are saved as
+  detection-only readings (no SIBs).
 - `cell_search` with a HackRF remains unreliable; use `-S`.
 - `-p auto` needs LTE cells on the chosen band, and calibration on bands
   above ~1.5 GHz is ambiguous for clocks more than ~25 ppm off.

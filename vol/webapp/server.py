@@ -10,6 +10,7 @@
 import argparse
 import json
 import os
+import platform
 import queue
 import re
 import signal
@@ -535,8 +536,9 @@ def known_job(p, filename):
     earfcns, wide = known_earfcns(filename)
     args = ["-K", " ".join(map(str, earfcns))]
     # 20 MHz cells only need skipping on SDRs that cannot follow them (HackRF);
-    # a bladeRF (61.44 MSPS) decodes them
-    if wide and p.get("device") != "bladeRF":
+    # a bladeRF (61.44 MSPS) decodes them, except on arm64, where sib-scan.sh
+    # runs it at 15.36 MSPS (srsue can't keep up with 30.72 there)
+    if wide and (p.get("device") != "bladeRF" or platform.machine() == "aarch64"):
         args += ["-W", " ".join(map(str, wide))]
     gain, gain_high = number(p, "gain"), number(p, "gain_high")
     if gain is not None:
