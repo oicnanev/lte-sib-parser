@@ -10,8 +10,7 @@ show_help () {
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (the ratio to the cell's sample rate must be an integer).
           Default with -d bladeRF: 30.72e6 (sample-rate changes take ~4 s
-          on a bladeRF 2.0; 15 MHz cells, 23.04 MSPS, then fail); 15.36e6
-          on arm64, which can't keep up with 30.72 (no 20 MHz cells)
+          on a bladeRF 2.0; 15 MHz cells, 23.04 MSPS, then fail)
   -p      frequency correction in ppm for SDR clock error, positive
           tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
           -p auto measures it on the band's LTE cells (HackRF, needs -b)
@@ -289,15 +288,8 @@ fi
 # bladeRF 2.0: changing the AD9361 sample rate takes seconds (1.92 MSPS alone
 # ~1.6 s), and srsue changes it twice per cell; keep the hardware at 30.72 MSPS
 # and let srsue decimate in software (1.92/7.68/15.36/30.72 are integer ratios)
-# On arm64 (measured in an Ubuntu VM on a MacBook M4) srsue's SYNC thread can't
-# decimate 30.72 MSPS in real time (97% CPU, drops samples, keeps losing the
-# cell): 15.36 MSPS there, enough for cells up to 10 MHz (-r 30.72e6 forces it)
 if [[ ${#srate_args[@]} -eq 0 && ${device_name,,} == "bladerf" ]]; then
-  if [[ $(uname -m) == aarch64 ]]; then
-    srate_args=(--rf.srate 15.36e6)
-  else
-    srate_args=(--rf.srate 30.72e6)
-  fi
+  srate_args=(--rf.srate 30.72e6)
 fi
 
 # retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined

@@ -247,11 +247,14 @@ cannot be tested end-to-end without it.
        start. With wisdom: bladeRF Found Cell 25 s, SIB1 decoded, 2 overflows/min.
        sib-scan's kill -9 during cell search made QEMU drop the bladeRF ("fatal
        IO error", 2/2) → stop_srsue: SIGINT in a VM (sys_vendor), -9 natively.
-       stop_srsue confirmed (device stays across attempts). SYNC thread 97% CPU
-       at 30.72 MSPS → srsue kept losing the cell; 15.36e6 default for bladeRF
-       on aarch64 (57% CPU, MIB+SIB1-5 first attempt; web app -W for 20 MHz).
-       Antenna outside the window: RSRP -43..-57 on B20, gain 45 worked (15/30
-       slow to find the cell). Next: full web app scan in the VM.
+       stop_srsue confirmed (device stays across attempts). srsue kept losing
+       the cell at 30.72 MSPS: gdb showed libbladeRF's stream thread (named
+       SYNC) at 96% in ioctl — plugin RX buffers were 1024 samples (sized from
+       1.92 MSPS at stream start). bladerf_rx.patch: 32768-sample buffers →
+       ~10% CPU, 20 MHz cell SIB1 after 11 s in the VM (temporary 15.36 MSPS
+       arm64 default reverted). Web app runs (gain 15/40) before the fix: 13
+       cells, 15 min; 2nd run 9:10. Next: rebuild image, Portugal preset again
+       in the VM; re-measure bladeRF success rate on the x86 laptop.
     b. **Direct MIB/SIB decoder instead of srsue**: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

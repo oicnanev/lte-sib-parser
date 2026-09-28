@@ -1,6 +1,8 @@
+diff --git a/lib/src/phy/rf/rf_blade_imp.c b/lib/src/phy/rf/rf_blade_imp.c
+index 16c2f6cd2..853cc5cde 100644
 --- a/lib/src/phy/rf/rf_blade_imp.c
 +++ b/lib/src/phy/rf/rf_blade_imp.c
-@@ -41,6 +41,7 @@
+@@ -41,6 +41,7 @@ typedef struct {
    bool                rx_stream_enabled;
    bool                tx_stream_enabled;
    srsran_rf_info_t    info;
@@ -8,7 +10,7 @@
  } rf_blade_handler_t;
  
  static srsran_rf_error_handler_t blade_error_handler     = NULL;
-@@ -75,7 +76,7 @@
+@@ -75,7 +76,7 @@ int rf_blade_start_tx_stream(void* h)
  
    status = bladerf_sync_config(handler->dev,
                                 BLADERF_TX_X1,
@@ -17,10 +19,23 @@
                                 num_buffers,
                                 buffer_size_tx,
                                 num_transfers,
-@@ -102,9 +103,14 @@
-    * SC16 Q11 samples *with* metadata are used. */
-   uint32_t buffer_size_rx = ms_buffer_size_rx * (handler->rx_rate / 1000 / 1024);
+@@ -98,42 +99,39 @@ int rf_blade_start_rx_stream(void* h, UNUSED bool now)
+   int                 status;
+   rf_blade_handler_t* handler = (rf_blade_handler_t*)h;
  
+-  /* Configure the device's RX module for use with the sync interface.
+-   * SC16 Q11 samples *with* metadata are used. */
+-  uint32_t buffer_size_rx = ms_buffer_size_rx * (handler->rx_rate / 1000 / 1024);
+-
++  /* Configure the device's RX module for use with the sync interface. */
++  /* lte-sib-parser: fixed 32768-sample USB buffers. The size was derived from
++   * the rate when the stream starts (1.92 MSPS): 1024 samples, ~30000 USB
++   * transfers per second at 30.72 MSPS. In an arm64 VM libbladeRF's stream
++   * thread spent 96% CPU submitting them and srsue kept losing the cell. */
++  const uint32_t     buffer_size_rx   = 32768;
++  const unsigned int num_buffers_rx   = 32;
++  const unsigned int num_transfers_rx = 16;
++
 +  /* lte-sib-parser: RX without metadata. Reading SC16_Q11_META with
 +   * BLADERF_META_FLAG_RX_NOW on every call dropped the samples buffered between
 +   * calls on bladeRF 2.0 (libbladeRF 2.6, FPGA 0.16), reported as overruns, and
@@ -29,11 +44,14 @@
    status = bladerf_sync_config(handler->dev,
                                 BLADERF_RX_X1,
 -                               BLADERF_FORMAT_SC16_Q11_META,
+-                               num_buffers,
 +                               BLADERF_FORMAT_SC16_Q11,
-                                num_buffers,
++                               num_buffers_rx,
                                 buffer_size_rx,
-                                num_transfers,
-@@ -113,27 +119,14 @@
+-                               num_transfers,
++                               num_transfers_rx,
+                                timeout_ms);
+   if (status != 0) {
      ERROR("Failed to configure RX sync interface: %s", bladerf_strerror(status));
      return status;
    }
@@ -64,7 +82,7 @@
    handler->rx_stream_enabled = true;
    return 0;
  }
-@@ -439,30 +432,28 @@
+@@ -439,30 +437,28 @@ int rf_blade_recv_with_time(void*       h,
    int                     status;
  
    memset(&meta, 0, sizeof(meta));

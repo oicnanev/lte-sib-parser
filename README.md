@@ -954,14 +954,32 @@ Changes in this fork, newest last, with the reason for each.
     at 97% CPU. At 15.36 MSPS it ran at 57%, srsue kept the cell and a
     `sib-scan.sh -K` run decoded MIB and SIB1-5 in one attempt. Letting srsue
     change the rate itself found no cell in 50 s (see the bladeRF section).
-    `sib-scan.sh` now defaults to `--rf.srate 15.36e6` for `-d bladeRF` on
-    arm64 (cells up to 10 MHz; `-r 30.72e6` forces the old rate), and the web
-    app passes 20 MHz EARFCNs as `-W` (detection only) there, as for a HackRF.
+    `sib-scan.sh` defaulted to `--rf.srate 15.36e6` for `-d bladeRF` on
+    arm64, and the web app passed 20 MHz EARFCNs as `-W` there. Replaced by 47.
+
+47. **bladeRF USB buffers of 32768 samples.** Profiling decision 46 with gdb
+    showed the thread at 97% was not srsue's but libbladeRF's stream thread
+    (it inherits the name SYNC), in `ioctl` submitting USB transfers. The
+    plugin sized its RX buffers from the sample rate when the stream starts,
+    1.92 MSPS, i.e. 1024 samples: ~30000 transfers per second at 30.72 MSPS,
+    each an expensive call in a VM. On a 20 MHz B3 cell in the arm64 VM:
+
+    | RX buffer (samples) | stream thread CPU | SIB1 after start | SI messages in 60 s |
+    |---|---|---|---|
+    | 1024 (old) | 96% | 44 s | 10 |
+    | 4096 | 44% | 50 s | 12 |
+    | 16384 | ~10% | 14 s | 25 |
+    | 32768 | ~10% | 11 s | 59 |
+
+    `bladerf_rx.patch` now configures 32768-sample buffers (32 buffers, 16
+    transfers), and decision 46 is reverted: 30.72 MSPS again on every
+    platform, 20 MHz cells decoded with srsue in the VM (a 10 MHz cell: SIB1
+    after 12 s). The same small buffers were used natively and may explain
+    part of the random srsue failures with a bladeRF there (decision 36).
 
 ### Known limitations
 
-- 20 MHz cells on a HackRF, or on a bladeRF on arm64, are saved as
-  detection-only readings (no SIBs).
+- 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
 - `cell_search` with a HackRF remains unreliable; use `-S`.
 - `-p auto` needs LTE cells on the chosen band, and calibration on bands
   above ~1.5 GHz is ambiguous for clocks more than ~25 ppm off.
