@@ -260,7 +260,10 @@ cannot be tested end-to-end without it.
        image, README decision 48). Default for -d bladeRF in sib-scan (coproc,
        SDR opened once, closed for bladeRF-cli checks; -U = srsue, -X elsewhere).
        Portugal preset via web app in the VM: 2:32, 14/14 cells with CGI (srsue
-       9:37). Open: soft combining for low-SNR cells (3475), HackRF untested.
+       9:37); without the bladeRF-cli PSS pre-check (decoder searches itself,
+       ppm from CFO): 1:18, 15 cells with CGI. Open: soft combining for low-SNR
+       cells (3475 SIB1 only), B7 2950 (weak 20 MHz: sync lost after MIB),
+       HackRF with -X untested.
        Original plan: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

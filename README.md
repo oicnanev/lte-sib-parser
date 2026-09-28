@@ -1000,7 +1000,7 @@ Changes in this fork, newest last, with the reason for each.
     |---|---|---|
     | open the bladeRF | per cell (~7 s) | once per scan (8.3 s) |
     | one carrier, MIB to all SIBs | ~25-60 s | 0.4-3 s (up to ~10 s on weak cells) |
-    | Portugal preset (web app) | 9:37, 13 cells with SIB1 | **2:32, 14 cells with SIB1** |
+    | Portugal preset (web app) | 9:37, 13 cells with SIB1 | 2:32, 14 cells with SIB1; **1:18, 15 cells** without the pre-check |
 
     Details that mattered: candidates of the cell search are only accepted
     once their PBCH decodes (a false PSS/SSS hit at PSR ~3 otherwise blocked the
@@ -1016,7 +1016,12 @@ Changes in this fork, newest last, with the reason for each.
     `parse_save_sib.py` used to crash on it (no such column in `cells.sqlite`)
     and lose the rest of the carrier's SIBs.
     Default with `-d bladeRF` (`-X` elsewhere, untested with a HackRF; `-U`
-    for srsue). Not yet: soft combining of SI retransmissions, which would help
+    for srsue). With `-K` and a bladeRF the PSS/SSS pre-check (`bladeRF-cli`
+    captures, ~75 s of the 2:32) is skipped: the decoder's own search finds the
+    cells (it found B1 2140, which the pre-check had missed), an empty EARFCN
+    costs ~5 s, SIB5 neighbours go straight to the decoder, retries only happen
+    where a MIB was decoded, and `-p auto` is the median of the cells' CFO in
+    ppm (1.16, the pre-check had measured 1.07-1.17), recorded but not applied. Not yet: soft combining of SI retransmissions, which would help
     low-SNR cells (B8 3475 at ~4 dB often gives SIB1 only).
 
 ### Known limitations

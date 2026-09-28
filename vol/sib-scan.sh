@@ -33,6 +33,8 @@ show_help () {
           numpy), then run srsue only where there is one. EARFCNs advertised
           in SIB5 by the cells decoded are checked too. With -p auto the
           clock is measured in the same pass. Example: -K "6200 1875 2800"
+          With -d bladeRF and lte_sib_decoder there is no pre-check: the
+          decoder searches each EARFCN itself (-p auto: measured from CFO)
   -W      with -K: EARFCNs known to be too wide for the SDR (20 MHz cells on
           a HackRF): saved as detection-only readings, no srsue
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
@@ -224,6 +226,24 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XU?" opt; do
 done
 
 
+if [[ -z $use_decoder ]]; then
+  use_decoder=0
+  [[ ${device_name,,} == "bladerf" ]] && use_decoder=1
+fi
+if [[ $use_decoder -eq 1 ]] && ! command -v lte_sib_decoder >/dev/null; then
+  echo "lte_sib_decoder not installed (rebuild the image): using srsue"
+  use_decoder=0
+fi
+# bladeRF + decoder: the decoder's own cell search replaces the PSS/SSS
+# pre-check of -K (bladeRF-cli captures, ~75 s for the Portugal list, which
+# was most of the scan); its clock (~1 ppm) needs no correction to find cells,
+# and -p auto is measured from the CFO of the cells decoded
+direct_known=0
+if [[ -n $known_list && $use_decoder -eq 1 && ${device_name,,} == "bladerf" ]]; then
+  direct_known=1
+fi
+cfo_ppm=()
+
 if [[ $do_sweep -ne 0 && -z $known_list ]]; then
   # hackrf_sweep and the calibration run on a HackRF: with another SDR for srsue,
   # the HackRF's clock correction would be applied to the wrong radio
@@ -258,7 +278,16 @@ fi
 
 earfcn_to_check=()
 earfcn_checked=()
-if [[ -n $known_list ]]; then
+if [[ -n $known_list && $direct_known -eq 1 ]]; then
+  earfcn_need_scan=($known_list)
+  earfcn_checked=($known_list)
+  initial_task="choose_earfcn_for_srsue"
+  do_cellsearch=0
+  if [[ $ppm == "auto" ]]; then
+    ppm=0
+    ppm_from_cfo=1
+  fi
+elif [[ -n $known_list ]]; then
   earfcn_to_check=($known_list)
   initial_task="check_known"
   do_cellsearch=0
@@ -333,14 +362,6 @@ fi
 # the decoder decimates in software like srsue: same fixed rate
 dec_srate=()
 [[ ${#srate_args[@]} -ne 0 ]] && dec_srate=(-r "${srate_args[1]}")
-if [[ -z $use_decoder ]]; then
-  use_decoder=0
-  [[ ${device_name,,} == "bladerf" ]] && use_decoder=1
-fi
-if [[ $use_decoder -eq 1 ]] && ! command -v lte_sib_decoder >/dev/null; then
-  echo "lte_sib_decoder not installed (rebuild the image): using srsue"
-  use_decoder=0
-fi
 
 # retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined
 if [[ -z $retries ]]; then
@@ -437,6 +458,11 @@ while true; do
                 echo "$line"
                 [[ $line == "done $earfcn "* ]] && break
               done
+              # clock error from the cell's CFO (tuned without correction)
+              cfo_khz=$(sed -n 's/.*Found Cell:.*CFO=\([-0-9.]*\) KHz.*/\1/p' "$SRSUELOG" | tail -1)
+              if [[ -n ${ppm_from_cfo:-} && -n $cfo_khz ]]; then
+                cfo_ppm+=($(python3 -c "print(round($cfo_khz * 1e9 / $dl_freq, 2))"))
+              fi
               # the log is complete: parse_save_sib stops at its "[decoder] done" line
               python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t 30 -T 30 -e "$earfcn" -d "$database" \
                   -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUELOG" --detection decoder
@@ -464,8 +490,10 @@ while true; do
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
             fi
             # success means SIB1 (the cell identity), not just the MIB
+            # (without the PSS/SSS pre-check, only where a cell was found: MIB)
             if ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" --sib1 "$earfcn" &&
-               [[ ${tries[$earfcn]:-0} -lt $retries ]]; then
+               [[ ${tries[$earfcn]:-0} -lt $retries ]] &&
+               { [[ $direct_known -eq 0 ]] || python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; }; then
                 tries[$earfcn]=$(( ${tries[$earfcn]:-0} + 1 ))
                 echo "no SIB1 on $earfcn: will retry at the end"
                 retry_queue+=($earfcn)
@@ -475,8 +503,14 @@ while true; do
               # -K: EARFCNs advertised in SIB5 are checked (cheap) before srsue
               for e in $(python3 $PY_PATH/get_neigh.py -d "$database" -e "$earfcn" 2>/dev/null); do
                 if ! containsElement $e "${earfcn_checked[@]}" && ! containsElement $e "${earfcn_to_check[@]}"; then
-                  echo "SIB5 of $earfcn advertises $e: will check it"
-                  earfcn_to_check+=($e)
+                  if [[ $direct_known -eq 1 ]]; then
+                    echo "SIB5 of $earfcn advertises $e: will decode it"
+                    earfcn_checked+=($e)
+                    containsElement $e "${earfcn_scanned[@]}" || earfcn_need_scan+=($e)
+                  else
+                    echo "SIB5 of $earfcn advertises $e: will check it"
+                    earfcn_to_check+=($e)
+                  fi
                 fi
               done
               task="choose_earfcn_for_srsue"
@@ -522,6 +556,11 @@ while true; do
             continue ;;
 
         "exit")
+            if [[ ${#cfo_ppm[@]} -ne 0 ]]; then
+              ppm=$(python3 -c "import statistics,sys; print(round(statistics.median(map(float, sys.argv[1:])), 2))" "${cfo_ppm[@]}")
+              echo "frequency correction: $ppm ppm (measured from the cells' CFO, not applied)"
+              python3 $PY_PATH/readings_db.py -d "$readings_database" set-ppm "$scan_id" "$ppm"
+            fi
             echo "exiting"
             exit 0
             break ;;
