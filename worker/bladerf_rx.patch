@@ -33,16 +33,38 @@
                                 num_buffers,
                                 buffer_size_rx,
                                 num_transfers,
-@@ -115,7 +121,7 @@
+@@ -113,27 +119,14 @@
+     ERROR("Failed to configure RX sync interface: %s", bladerf_strerror(status));
+     return status;
    }
-   status = bladerf_sync_config(handler->dev,
-                                BLADERF_TX_X1,
+-  status = bladerf_sync_config(handler->dev,
+-                               BLADERF_TX_X1,
 -                               BLADERF_FORMAT_SC16_Q11_META,
-+                               BLADERF_FORMAT_SC16_Q11, /* same format as RX (required); TX is never used */
-                                num_buffers,
-                                buffer_size_tx,
-                                num_transfers,
-@@ -439,28 +445,19 @@
+-                               num_buffers,
+-                               buffer_size_tx,
+-                               num_transfers,
+-                               timeout_ms);
+-  if (status != 0) {
+-    ERROR("Failed to configure TX sync interface: %s", bladerf_strerror(status));
+-    return status;
+-  }
++  /* lte-sib-parser: the TX module is neither configured nor enabled here (it
++   * was, although the scan never transmits): it stays off, whatever is on the
++   * TX ports. */
+   status = bladerf_enable_module(handler->dev, BLADERF_RX_X1, true);
+   if (status != 0) {
+     ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
+     return status;
+   }
+-  status = bladerf_enable_module(handler->dev, BLADERF_TX_X1, true);
+-  if (status != 0) {
+-    ERROR("Failed to enable TX module: %s", bladerf_strerror(status));
+-    return status;
+-  }
+   handler->rx_stream_enabled = true;
+   return 0;
+ }
+@@ -439,28 +432,19 @@
    int                     status;
  
    memset(&meta, 0, sizeof(meta));

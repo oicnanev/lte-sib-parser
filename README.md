@@ -498,8 +498,13 @@ through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
 - **Gain**: much lower than a HackRF's; 30 on B20/B8 and 40 on B3/B1/B7 worked
   where the signal is strong, 40 already saturated on B20 there (MIB SNR 1.9 dB
   at 40, 11.9 dB at 30).
-- **Antenna on RX1**: srsRAN and the checks use channel RX1. A 1.4 GHz antenna
-  there gave much weaker B3/B7 detections than a wideband one.
+- **Antenna on RX1**: srsRAN and the checks use channel RX1 only; RX2, TX1 and
+  TX2 can stay unconnected (the TX module is never enabled). A 1.4 GHz antenna
+  there gave much weaker B3/B7 detections than a wideband one. A Cisco
+  4G-LTE-ANTM-D (LTE dipole, 698–960 / 1710–2690 MHz) gave +17.6 dB on B20 and
+  +2.9 dB on B8 over the generic telescopic antenna, and about the same on
+  B3/B7 — with it, use gain **15** below 1 GHz (30 saturated B20: MIB SNR
+  1.6 dB at 30, 12.5 dB at 15) and 40 above.
 - The PSS/SSS checks capture with `bladeRF-cli`, which must switch the AGC off
   before a manual gain is accepted.
 - Sweep mode (`-S`) uses `hackrf_sweep` and stays HackRF-only; use `-K`.
@@ -796,6 +801,14 @@ Changes in this fork, newest last, with the reason for each.
     a server restart (e.g. `systemctl restart`) the server had no position and
     readings were saved without one until the user moved or reloaded the page.
     The page now resends its last position when the server reports none.
+
+38. **bladeRF TX module never enabled.** srsRAN's plugin configured and enabled
+    the TX module whenever it started receiving. No sample was ever sent
+    (`rx_only.patch` stops every TX path in the radio), but an enabled
+    transmitter with no load on its port contradicts "never transmits".
+    `bladerf_rx.patch` now leaves TX unconfigured and disabled when RX starts;
+    the only remaining enable is in the send path, which `rx_only.patch` makes
+    unreachable.
 
 ### Known limitations
 
