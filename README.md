@@ -197,7 +197,7 @@ usage: sib-scan.sh [OPTION]...
   -s      start earfcn
   -e      end earfcn
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
-          only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
+          only: -d soapy -a driver=hackrf; needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
   -w      with -S: also run srsue on carriers >= 16 MHz wide (20 MHz cells).
           By default they are saved as detection-only readings (PCI and
@@ -901,6 +901,15 @@ Changes in this fork, newest last, with the reason for each.
     HackRF's stock antenna, 56/70 had worked at home). The HackRF capture gain
     below 1 GHz reaches `sib-scan.sh` as `LTE_HACKRF_LOW_GAIN`; the server only
     accepts `lna,vga` numbers.
+
+42. **Sweep mode only with a HackRF.** A web app scan with the SDR set to
+    bladeRF but the mode left on *Sweep* ran `hackrf_sweep` and the clock
+    calibration on the HackRF that was also plugged in (18.8 ppm), then srsue
+    on the bladeRF (~1.2 ppm) with that correction, ~14 kHz off: no cell
+    decoded, one garbled MIB. Now choosing the bladeRF in the web app disables
+    *Sweep* and selects the known-EARFCN preset, the server rejects sweep with
+    any SDR but a HackRF, and `sib-scan.sh -S` refuses other devices before it
+    registers a scan or calibrates.
 
 ### Known limitations
 

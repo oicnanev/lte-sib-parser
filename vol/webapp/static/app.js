@@ -354,6 +354,15 @@ function applySdr(save) {
   const d = SDR_DEFAULTS[form.sdr.value];
   if (d) for (const [k, v] of Object.entries(d)) form[k].value = v;
   document.querySelector(".for-hackrf").style.display = form.sdr.value === "bladerf" ? "none" : "";
+  // sweep mode needs hackrf_sweep: not available with a bladeRF, whose best
+  // mode is the known-EARFCN preset
+  const sweep = form.mode.querySelector('option[value="sweep"]');
+  sweep.disabled = form.sdr.value === "bladerf";
+  if (form.sdr.value === "bladerf" && form.mode.value !== "list") {
+    form.mode.value = "cell_search";
+    if ([...form.band.options].some((o) => o.value === "pt_known")) form.band.value = "pt_known";
+    updateFormMode();
+  }
   if (save) try { localStorage.setItem("sdr", form.sdr.value); } catch (e) {}
 }
 form.sdr.onchange = () => applySdr(true);
@@ -477,6 +486,7 @@ function connect() {
       `(${b.start_mhz}–${b.end_mhz} MHz, ${esc(b.mode)})</option>`).join("") +
     '<option value="custom">Custom list…</option>';
   updateFormMode();
+  applySdr(false); // again now that the band list (and its presets) exists
   for (const r of await api("/api/readings")) readings.set(r.id, r);
   await loadScans();
   renderTable();

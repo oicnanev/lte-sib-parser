@@ -410,6 +410,10 @@ def build_job(p):
     if mode in ("sweep", "cell_search"):
         if not bands:
             raise BadRequest("%s needs a band" % mode)
+        is_hackrf = device == "soapy" and "driver=hackrf" in dev_args.lower()
+        if mode == "sweep" and not is_hackrf:
+            raise BadRequest("sweep mode needs a HackRF; with this SDR use the "
+                             "\"Portugal (known EARFCNs)\" preset or an EARFCN list")
         steps = [(b, (["-S"] if mode == "sweep" else []) + ["-b", str(b)] + gain_args(b) + common)
                  for b in bands]
     elif mode == "list":

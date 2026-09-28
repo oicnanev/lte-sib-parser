@@ -172,6 +172,15 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:?" opt; do
 done
 
 
+if [[ $do_sweep -ne 0 && -z $known_list ]]; then
+  # hackrf_sweep and the calibration run on a HackRF: with another SDR for srsue,
+  # the HackRF's clock correction would be applied to the wrong radio
+  if [[ ${device_name,,} != "soapy" || ${device_args,,} != *driver=hackrf* ]]; then
+    echo "-S needs a HackRF (-d soapy -a driver=hackrf); use -K with other SDRs"
+    exit 1
+  fi
+fi
+
 # register the scan first, so a scan stopped during calibration or sweep is recorded too
 ppm_arg=()
 [[ $ppm != "auto" ]] && ppm_arg=(--ppm "$ppm")
