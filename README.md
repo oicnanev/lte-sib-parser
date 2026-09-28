@@ -525,7 +525,12 @@ through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
   the AD9361's sample rate is slow (see decision 39), so the hardware stays at
   30.72 MSPS and srsue decimates in software. 15 MHz cells (23.04 MSPS, not an
   integer divisor) would fail; none is on the Portuguese list.
-- Sweep mode (`-S`) uses `hackrf_sweep` and stays HackRF-only; use `-K`.
+- **Sweep mode (`-S`) without a list** (decision 49): the band is captured in
+  ~23 MHz pieces at 30.72 MSPS (2 s each) and `lte_sib_decoder` searches every
+  EARFCN of each capture and decodes the cells from the same samples. In the
+  web app choose *Sweep* with the bladeRF (e.g. the "Portugal sweep" preset):
+  ~4 min for B20, B8, B28, B3, B1, B7; the known-EARFCN preset is faster
+  (~1.5 min) when the carriers are known.
 - **Use `-t 45`**: srsue takes ~10 s longer to start on a bladeRF, and with
   `-t 30` some cells that decode fine by hand (B3 1875, B7 2800) ran out of
   time in a full run.
@@ -629,6 +634,7 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
 | `vol/webapp/server.py` | the web app (`--port`, `--db` readings database, `--learned` learned-EARFCN file) |
+| `vol/scripts/wide_chunks.py -b <band>` | split a band into the wide captures used by `sib-scan.sh -S` with a bladeRF (centre and EARFCN range per capture) |
 | `vol/scripts/check_earfcns.py -e "<earfcns>"` | check EARFCNs for cells with PSS/SSS, measure the clock (`-p auto`) |
 | `vol/webapp/demo/make_demo_db.py <db>` | readings database with fictitious data (test PLMN 001-01), for demos and screenshots |
 
@@ -1023,6 +1029,35 @@ Changes in this fork, newest last, with the reason for each.
     where a MIB was decoded, and `-p auto` is the median of the cells' CFO in
     ppm (1.16, the pre-check had measured 1.07-1.17), recorded but not applied. Not yet: soft combining of SI retransmissions, which would help
     low-SNR cells (B8 3475 at ~4 dB often gives SIB1 only).
+
+49. **Wide captures with the bladeRF: carriers found without a list.** With
+    the decoder at ~1 s per carrier, decoding several known carriers from one
+    capture saves little; what a capture wider than one carrier adds is looking
+    at every EARFCN it covers, which gives the bladeRF a sweep mode (`-S`, until
+    now HackRF-only). `lte_sib_decoder` got a capture source: 2 s of samples in
+    RAM, and per EARFCN a frequency shift (NCO) before the usual decimation,
+    with time counted in samples (offline decoding runs faster than real time:
+    all SIBs of a carrier in 0.2-0.7 s). Commands in `-s` mode: `wide` (known
+    carriers from one capture) and `scan` (capture, probe each EARFCN with
+    PSS/SSS and two matching PBCH decodes, then decode the cells found; hits
+    within 3 EARFCNs of a stronger one are aliases). `vol/scripts/wide_chunks.py`
+    splits a band into captures with non-overlapping EARFCN ranges that fit in
+    0.4 x the rate - 0.6 MHz each side of the centre; `-x` (MHz already read in
+    an overlapping band, e.g. B20 inside B28) is honoured. The web app allows
+    *Sweep* with the bladeRF again (decision 42 blocked it because it meant
+    `hackrf_sweep`); a bladeRF sweep never touches a HackRF.
+    Measured in the arm64 VM: ~150-230 EARFCNs probed in 3.5-4 s per capture;
+    B20 (2 captures) 22 s including opening the bladeRF; the Portugal sweep
+    preset (17 captures) 4:01, 16 carriers / 17 cells found (two on B1 2160),
+    15 with SIB1 — every carrier of the known list, without it.
+    What went wrong on the way: the first probes missed ~1 cell in 3 because
+    each capture began with samples buffered before the retune (libbladeRF
+    holds ~50 ms; now 200 ms are dropped); and a single PBCH decode was not
+    enough: its 16-bit CRC, tried over 40 frames x 4 SFN offsets x 3 antenna
+    counts, passed by chance about once per band ("PCI 0" hits).
+    61.44 MSPS (49 MHz filter) also works over the VM's USB 3 and found all
+    three 20 MHz carriers of B1 and of B3 in one capture each, but probing costs
+    5-10x more per EARFCN (22-41 s per capture), so 30.72 MSPS is the default.
 
 ### Known limitations
 

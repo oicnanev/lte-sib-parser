@@ -271,7 +271,13 @@ cannot be tested end-to-end without it.
        SI messages, output JSON like srsue's "Content:" lines so
        parse_save_sib/readings_db stay. Estimate (unmeasured): ~8 s per carrier,
        Portugal preset ~2 min instead of 5.5. Prototype and measure first.
-    c. **Wideband bladeRF capture**: one capture up to ~56 MHz covering several
+    c. ✅ 2026-09-28 night: **wide captures** (README decision 49): `sib-scan -S -d
+       bladeRF` captures 2 s per ~23 MHz (30.72 MSPS; wide_chunks.py) and the
+       decoder's `scan` probes every EARFCN + decodes from RAM. Portugal sweep
+       preset 4:01, 16 carriers/17 cells, no list. Web app Sweep enabled for
+       bladeRF. 61.44 MSPS works but probing is 5-10x slower per EARFCN.
+       Not done: several PCIs per carrier (only the strongest per N_id_2).
+       Original plan: one capture up to ~56 MHz covering several
        carriers of a band (e.g. most of B1/B3), digital down-conversion per
        carrier, decode all from the same samples; also all cells (PCIs) on a
        carrier, not just the strongest.

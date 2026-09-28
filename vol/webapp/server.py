@@ -411,8 +411,9 @@ def build_job(p):
         if not bands:
             raise BadRequest("%s needs a band" % mode)
         is_hackrf = device == "soapy" and "driver=hackrf" in dev_args.lower()
-        if mode == "sweep" and not is_hackrf:
-            raise BadRequest("sweep mode needs a HackRF; with this SDR use the "
+        # HackRF: hackrf_sweep; bladeRF: wide captures searched by lte_sib_decoder
+        if mode == "sweep" and not (is_hackrf or device == "bladeRF"):
+            raise BadRequest("sweep mode needs a HackRF or a bladeRF; with this SDR use the "
                              "\"Portugal (known EARFCNs)\" preset or an EARFCN list")
         steps = [(b, (["-S"] if mode == "sweep" else []) + ["-b", str(b)] + gain_args(b) + common)
                  for b in bands]

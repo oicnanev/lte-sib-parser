@@ -355,12 +355,9 @@ function applySdr(save) {
   const d = SDR_DEFAULTS[form.sdr.value];
   if (d) for (const [k, v] of Object.entries(d)) form[k].value = v;
   document.querySelector(".for-hackrf").style.display = form.sdr.value === "bladerf" ? "none" : "";
-  // sweep mode needs hackrf_sweep: not available with a bladeRF, whose best
-  // mode is the known-EARFCN preset
-  const sweep = form.mode.querySelector('option[value="sweep"]');
-  sweep.disabled = form.sdr.value === "bladerf";
-  if (form.sdr.value === "bladerf" && form.mode.value !== "list") {
-    form.mode.value = "cell_search";
+  // with a bladeRF, sweep means wide captures searched by lte_sib_decoder (no
+  // hackrf_sweep); the known-EARFCN preset is still the fastest start
+  if (form.sdr.value === "bladerf" && form.mode.value === "cell_search") {
     if ([...form.band.options].some((o) => o.value === "pt_known")) form.band.value = "pt_known";
     updateFormMode();
   }

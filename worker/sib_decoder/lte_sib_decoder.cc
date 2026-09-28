@@ -29,7 +29,9 @@
 #include <ctime>
 #include <getopt.h>
 #include <set>
+#include <sstream>
 #include <string>
+#include <vector>
 #include <sys/time.h>
 
 #include "srsran/asn1/rrc.h"
@@ -134,7 +136,10 @@ static void log_content(FILE* f, const T& msg)
   log_line(f, "RRC", "Content: " + s);
 }
 
-/* ---- RF reception with optional decimation ---- */
+/* ---- RF reception with optional decimation ----
+ * Samples come from the SDR, or from a capture in RAM (wide mode: several
+ * carriers decoded from one capture). From RAM they are shifted in frequency
+ * (carrier to baseband) before the decimation, and time is counted in samples. */
 struct rx_t {
   srsran_rf_t            rf       = {};
   double                 hw_srate = 0; // fixed hardware rate, 0 if the device rate is changed
@@ -143,7 +148,37 @@ struct rx_t {
   bool                   dec_init = false;
   cf_t*                  tmp      = nullptr;
   uint32_t               tmp_len  = 0;
+  // capture in RAM
+  bool     from_buf = false;
+  cf_t*    buf      = nullptr;
+  uint64_t buf_len  = 0;
+  uint64_t buf_pos  = 0;
+  cf_t     nco      = 1; // current phasor of the frequency shift
+  cf_t     nco_step = 1;
 };
+
+// seconds: wall clock from the SDR, sample time in a capture
+static double rx_clock(const rx_t& rx)
+{
+  return rx.from_buf ? (double)rx.buf_pos / rx.hw_srate : now_s();
+}
+
+// false once a capture is nearly used up (stop before srsRAN reads past its end
+// and prints errors); always true when reading from the SDR
+static bool capture_left(const rx_t& rx)
+{
+  return !rx.from_buf || rx.buf_pos + (uint64_t)(0.1 * rx.hw_srate) < rx.buf_len;
+}
+
+// start reading the capture from the beginning, shifted by -shift_hz
+static void buf_rewind(rx_t& rx, double shift_hz)
+{
+  rx.buf_pos  = 0;
+  rx.nco      = 1;
+  double w    = -2 * M_PI * shift_hz / rx.hw_srate;
+  __real__ rx.nco_step = cosf(w); // cf_t is GCC's C complex type here
+  __imag__ rx.nco_step = sinf(w);
+}
 
 static int set_srate(rx_t& rx, double srate)
 {
@@ -195,10 +230,29 @@ static int recv_cb(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srs
     }
     dst = rx.tmp;
   }
-  void* ptr[SRSRAN_MAX_CHANNELS] = {};
-  ptr[0]                         = dst;
-  int ret = srsran_rf_recv_with_time_multi(&rx.rf, ptr, n, true, t ? &t->full_secs : nullptr,
-                                           t ? &t->frac_secs : nullptr);
+  int ret;
+  if (rx.from_buf) {
+    if (rx.buf_pos + n > rx.buf_len) {
+      return -1; // end of the capture (callers stop earlier, see capture_left)
+    }
+    const cf_t* src = rx.buf + rx.buf_pos;
+    cf_t        ph  = rx.nco;
+    for (uint32_t i = 0; i < n; i++) {
+      dst[i] = src[i] * ph;
+      ph *= rx.nco_step;
+    }
+    rx.nco = ph / sqrtf(__real__ ph * __real__ ph + __imag__ ph * __imag__ ph); // keep |phasor| = 1
+    rx.buf_pos += n;
+    if (t) {
+      srsran_timestamp_init(t, 0, 0);
+    }
+    ret = n;
+  } else {
+    void* ptr[SRSRAN_MAX_CHANNELS] = {};
+    ptr[0]                         = dst;
+    ret = srsran_rf_recv_with_time_multi(&rx.rf, ptr, n, true, t ? &t->full_secs : nullptr,
+                                         t ? &t->frac_secs : nullptr);
+  }
   if (ret < 0 || rx.ratio == 1) {
     return ret;
   }
@@ -317,16 +371,27 @@ static int decode_si(srsran_ue_dl_t* q, srsran_dl_sf_cfg_t* sf, srsran_ue_dl_cfg
 }
 
 /* ---- one carrier: search, MIB, SIB1, SI messages ---- */
-static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, float gain, double offset, FILE* f)
+static const char* process_carrier(rx_t&         rx,
+                                   const args_t& args,
+                                   int           earfcn,
+                                   float         gain,
+                                   double        offset,
+                                   FILE*         f,
+                                   double        capture_center = 0)
 {
-  double t0 = now_s();
   double dl = srsran_band_fd(earfcn) * 1e6;
   if (dl <= 0) {
     return "error";
   }
-  srsran_rf_set_rx_gain(&rx.rf, gain);
-  srsran_rf_set_rx_freq(&rx.rf, 0, dl + offset);
-  printf("EARFCN %d: %.1f MHz (offset %.0f Hz), gain %.0f\n", earfcn, dl / 1e6, offset, gain);
+  if (rx.from_buf) {
+    buf_rewind(rx, dl + offset - capture_center);
+    printf("EARFCN %d: %.1f MHz from the capture (%+.2f MHz)\n", earfcn, dl / 1e6, (dl + offset - capture_center) / 1e6);
+  } else {
+    srsran_rf_set_rx_gain(&rx.rf, gain);
+    srsran_rf_set_rx_freq(&rx.rf, 0, dl + offset);
+    printf("EARFCN %d: %.1f MHz (offset %.0f Hz), gain %.0f\n", earfcn, dl / 1e6, offset, gain);
+  }
+  double t0 = rx_clock(rx);
 
   /* 1. PSS/SSS search and MIB at 1.92 MSPS */
   double        t_search = t0 + args.search_s;
@@ -347,7 +412,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
     }
     srsran_ue_cellsearch_set_nof_valid_frames(&cs, SRSRAN_DEFAULT_NOF_VALID_PSS_FRAMES);
     bool found = false;
-    while (!found && !go_exit && now_s() < t_search) {
+    while (!found && !go_exit && rx_clock(rx) < t_search && capture_left(rx)) {
       srsran_ue_cellsearch_result_t res[3] = {};
       uint32_t                      best   = 0;
       if (set_srate(rx, SRSRAN_CS_SAMP_FREQ) || srsran_ue_cellsearch_scan(&cs, res, &best) < 0) {
@@ -355,7 +420,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
       }
       int order[3] = {0, 1, 2};
       std::sort(order, order + 3, [&](int a, int b) { return res[a].psr > res[b].psr; });
-      for (int k = 0; k < 3 && !found && !go_exit && now_s() < t_search; k++) {
+      for (int k = 0; k < 3 && !found && !go_exit && rx_clock(rx) < t_search && capture_left(rx); k++) {
         const srsran_ue_cellsearch_result_t& r = res[order[k]];
         if (r.psr <= 0 || r.mode <= 0) {
           continue;
@@ -373,7 +438,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
         int n = srsran_ue_mib_sync_decode(&ue_mib, 40, bch, &cell.nof_ports, nullptr);
         if (args.verbose) {
           printf("  candidate PCI %d PSR %.2f mode %.2f CFO %.0f Hz: MIB %s (%.1f s)\n", r.cell_id, r.psr, r.mode,
-                 r.cfo, n == 1 ? "yes" : "no", now_s() - t0);
+                 r.cfo, n == 1 ? "yes" : "no", rx_clock(rx) - t0);
         }
         if (n == 1) {
           cfo   = srsran_ue_sync_get_cfo(&ue_mib.ue_sync);
@@ -395,7 +460,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
     snprintf(line, sizeof(line), "Found Cell:  Mode=%s, PCI=%d, PRB=%d, Ports=%d, CP=%s, CFO=%.1f KHz",
              cell.frame_type == SRSRAN_FDD ? "FDD" : "TDD", cell.id, cell.nof_prb, cell.nof_ports,
              cell.cp == SRSRAN_CP_NORM ? "Normal" : "Extended", cfo / 1e3);
-    printf("%s (%.1f s)\n", line, now_s() - t0);
+    printf("%s (%.1f s)\n", line, rx_clock(rx) - t0);
     log_line(f, "PHY", line);
     uint8_t                   packed[4] = {};
     asn1::rrc::bcch_bch_msg_s mib;
@@ -460,14 +525,14 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
   float      rsrp_sum  = 0;
   int        rsrp_n    = 0;
   bool       rsrp_done = false;
-  double     deadline  = now_s() + args.sib1_s;
+  double     deadline  = rx_clock(rx) + args.sib1_s;
   uint32_t   n_sf = 0, n_nosync = 0, n_nosfn = 0, n_dci = 0, n_crc = 0;
   uint32_t   prev_sf   = 0;
   uint32_t   frames_since_pbch = 0;
-  double     last_sync = now_s();
-  double     last_sfn  = now_s();
+  double     last_sync = rx_clock(rx);
+  double     last_sfn  = rx_clock(rx);
   uint32_t   n_reset   = 0;
-  while (!go_exit && now_s() < deadline && !(st.done() && rsrp_done)) {
+  while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && rsrp_done)) {
     cf_t* bufs[SRSRAN_MAX_CHANNELS] = {sf_buf[0]};
     int   n                         = srsran_ue_sync_zerocopy(&ue_sync, bufs, max_samples);
     if (n < 0) {
@@ -477,12 +542,12 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
     if (n != 1) {
       have_sfn = false; // lost sync: read the SFN again from the PBCH
       n_nosync++;
-      if (now_s() - last_sync > 1.0) {
+      if (rx_clock(rx) - last_sync > 1.0) {
         break; // lost the cell
       }
       continue;
     }
-    last_sync = now_s();
+    last_sync = rx_clock(rx);
     n_sf++;
     uint32_t sf_idx = srsran_ue_sync_get_sfidx(&ue_sync);
     if (have_sfn && sf_idx != (prev_sf + 1) % 10) {
@@ -506,14 +571,14 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
       n_nosfn++;
       // synced but no PBCH at "subframe 0": subframe 0/5 taken from a wrong SSS
       // decision stays wrong while tracking; search the timing again
-      if (now_s() - last_sfn > 0.2) {
+      if (rx_clock(rx) - last_sfn > 0.2) {
         srsran_ue_sync_reset(&ue_sync);
-        last_sfn = now_s();
+        last_sfn = rx_clock(rx);
         n_reset++;
       }
       continue;
     }
-    last_sfn = now_s();
+    last_sfn = rx_clock(rx);
     // SIB1: subframe 5 of even frames; SI messages: in the other subframes
     bool sib1_sf = sf_idx == 5 && sfn % 2 == 0;
     bool search  = st.have_sib1 ? !sib1_sf : sib1_sf;
@@ -546,7 +611,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
                pdsch_cfg.grant.tb[0].tbs, ue_dl.chest_res.snr_db);
       }
       if (crc && handle_dlsch(f, st, data[0], pdsch_cfg.grant.tb[0].tbs / 8)) {
-        deadline = now_s() + args.si_s; // something new: keep listening
+        deadline = rx_clock(rx) + args.si_s; // something new: keep listening
       }
     }
     if (sf_idx == 9) {
@@ -555,7 +620,7 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
   }
   status = st.done() ? "sibs" : st.have_sib1 ? "sib1" : "mib";
   printf("EARFCN %d: %s, %zu of %zu SI SIBs (%.1f s)\n", earfcn, status, st.received.size(), st.expected.size(),
-         now_s() - t0);
+         rx_clock(rx) - t0);
   if (args.verbose) {
     printf("  subframes %u, not synced %u, no SFN %u (resets %u), SI-RNTI DCIs %u, CRC ok %u\n", n_sf, n_nosync,
            n_nosfn, n_reset, n_dci, n_crc);
@@ -570,7 +635,13 @@ static const char* process_carrier(rx_t& rx, const args_t& args, int earfcn, flo
   return status;
 }
 
-static const char* run_carrier(rx_t& rx, const args_t& args, int earfcn, float gain, double offset, const char* path)
+static const char* run_carrier(rx_t&         rx,
+                               const args_t& args,
+                               int           earfcn,
+                               float         gain,
+                               double        offset,
+                               const char*   path,
+                               double        capture_center = 0)
 {
   FILE* f = stdout;
   if (path && *path) {
@@ -580,8 +651,8 @@ static const char* run_carrier(rx_t& rx, const args_t& args, int earfcn, float g
       return "error";
     }
   }
-  const char* status = process_carrier(rx, args, earfcn, gain, offset, f);
-  if (strcmp(status, "mib") == 0 && !go_exit) {
+  const char* status = process_carrier(rx, args, earfcn, gain, offset, f, capture_center);
+  if (strcmp(status, "mib") == 0 && !go_exit && !rx.from_buf) {
     status = process_carrier(rx, args, earfcn, gain, offset, f); // cell there, no SIB1: once more
   }
   log_line(f, "DEC", std::string("[decoder] done ") + status);
@@ -589,6 +660,208 @@ static const char* run_carrier(rx_t& rx, const args_t& args, int earfcn, float g
     fclose(f);
   }
   return status;
+}
+
+/* ---- wide mode: one capture, several carriers ---- */
+static uint64_t buf_cap = 0;
+
+static bool capture(rx_t& rx, double center, float gain, double seconds)
+{
+  if (rx.hw_srate <= 0) {
+    fprintf(stderr, "wide mode needs a fixed hardware rate (-r)\n");
+    return false;
+  }
+  uint64_t n = (uint64_t)(seconds * rx.hw_srate);
+  if (n > buf_cap) {
+    free(rx.buf);
+    rx.buf  = srsran_vec_cf_malloc(n);
+    buf_cap = rx.buf ? n : 0;
+    if (!rx.buf) {
+      fprintf(stderr, "no memory for a %.1f s capture\n", seconds);
+      return false;
+    }
+  }
+  srsran_rf_set_rx_gain(&rx.rf, gain);
+  srsran_rf_set_rx_freq(&rx.rf, 0, center);
+  const uint32_t chunk = 1 << 16;
+  double         t0    = now_s();
+  // drop what the SDR buffered before and while retuning: libbladeRF alone
+  // holds up to ~50 ms (32 buffers + 16 transfers of 32768 samples at 30.72 MSPS)
+  for (uint64_t d = 0; d < (uint64_t)(0.2 * rx.hw_srate); d += chunk) {
+    void* ptr[SRSRAN_MAX_CHANNELS] = {rx.buf};
+    srsran_rf_recv_with_time_multi(&rx.rf, ptr, chunk, true, nullptr, nullptr);
+  }
+  for (uint64_t pos = 0; pos < n; pos += chunk) {
+    uint32_t len                   = (uint32_t)std::min<uint64_t>(chunk, n - pos);
+    void*    ptr[SRSRAN_MAX_CHANNELS] = {rx.buf + pos};
+    if (srsran_rf_recv_with_time_multi(&rx.rf, ptr, len, true, nullptr, nullptr) < 0) {
+      return false;
+    }
+  }
+  rx.buf_len = n;
+  printf("captured %.1f s at %.1f MHz, %.2f MSPS (%.1f s)\n", seconds, center / 1e6, rx.hw_srate / 1e6, now_s() - t0);
+  return true;
+}
+
+// quick look for a cell on one EARFCN of the capture: PSS/SSS, then PBCH.
+// Returns the PCI, or -1.
+static int probe_earfcn(rx_t& rx, int earfcn, double center, double offset, float* psr)
+{
+  double dl = srsran_band_fd(earfcn) * 1e6;
+  buf_rewind(rx, dl + offset - center);
+  if (set_srate(rx, SRSRAN_CS_SAMP_FREQ)) {
+    return -1;
+  }
+  srsran_ue_cellsearch_t cs;
+  if (srsran_ue_cellsearch_init_multi(&cs, 8, recv_cb, 1, &rx)) {
+    return -1;
+  }
+  srsran_ue_cellsearch_set_nof_valid_frames(&cs, 4);
+  srsran_ue_cellsearch_result_t res[3] = {};
+  uint32_t                      best   = 0;
+  int                           n      = srsran_ue_cellsearch_scan(&cs, res, &best);
+  srsran_ue_cellsearch_free(&cs);
+  if (n <= 0) {
+    return -1;
+  }
+  // confirm with the PBCH (a false PSS/SSS hit does not decode)
+  srsran_ue_mib_sync_t ue_mib;
+  if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, 1, &rx)) {
+    return -1;
+  }
+  srsran_cell_t cell = {};
+  cell.id            = res[best].cell_id;
+  cell.cp            = res[best].cp;
+  cell.frame_type    = res[best].frame_type;
+  srsran_ue_mib_sync_set_cell(&ue_mib, cell);
+  ue_mib.ue_sync.cfo_current_value       = res[best].cfo / 15000;
+  ue_mib.ue_sync.cfo_is_copied           = true;
+  ue_mib.ue_sync.cfo_correct_enable_find = true;
+  srsran_sync_set_cfo_cp_enable(&ue_mib.ue_sync.sfind, false, 0);
+  // a 16-bit CRC over up to 40 frames x 4 SFN offsets x 3 port counts passes by
+  // chance on ~1 EARFCN in 150: a second decode must give the same MIB
+  uint8_t  bch[SRSRAN_BCH_PAYLOAD_LEN], bch2[SRSRAN_BCH_PAYLOAD_LEN];
+  uint32_t ports2 = 0;
+  int      m      = srsran_ue_mib_sync_decode(&ue_mib, 40, bch, &cell.nof_ports, nullptr);
+  bool     ok     = false;
+  if (m == 1) {
+    srsran_ue_sync_reset(&ue_mib.ue_sync);
+    int m2 = srsran_ue_mib_sync_decode(&ue_mib, 40, bch2, &ports2, nullptr);
+    // same bandwidth and PHICH config (the SFN bits differ, 6 bits at the start)
+    ok = m2 == 1 && ports2 == cell.nof_ports && memcmp(bch, bch2, 6) == 0;
+  }
+  srsran_ue_mib_sync_free(&ue_mib);
+  *psr = res[best].psr;
+  return ok ? (int)cell.id : -1;
+}
+
+// "scan <center_hz> <seconds> <gain> <earfcn_lo> <earfcn_hi> <offset_ppm> <log_prefix> [skip_mhz...]": capture, look
+// for cells on every EARFCN the capture covers, decode the ones found. Answers
+// "found <earfcn> <pci>" and "done <earfcn> <status>" per cell, then "scan done".
+static void scan_command(rx_t& rx, const args_t& args, const std::string& line)
+{
+  std::istringstream in(line);
+  std::string        word, prefix;
+  double             center = 0, seconds = 0, ppm = 0;
+  float              gain   = 0;
+  int                lo = 0, hi = -1;
+  in >> word >> center >> seconds >> gain >> lo >> hi >> ppm >> prefix;
+  std::vector<double> skip_mhz; // carriers already read (e.g. B20 inside B28)
+  double              x;
+  while (in >> x) {
+    skip_mhz.push_back(x);
+  }
+  if (prefix.empty() || !capture(rx, center, gain, seconds)) {
+    printf("scan done (error)\n");
+    return;
+  }
+  // usable band: the AD9361's filter is 0.8 x the rate; the PSS/SSS/PBCH need
+  // the centre 1.08 MHz of a carrier
+  double half = 0.4 * rx.hw_srate - 0.6e6;
+  double t0   = now_s();
+  rx.from_buf = true;
+  struct hit_t {
+    int   earfcn, pci;
+    float psr;
+  };
+  std::vector<hit_t> hits;
+  int                probed = 0;
+  for (int e = lo; e <= hi && !go_exit; e++) {
+    double dl = srsran_band_fd(e) * 1e6;
+    if (dl <= 0 || fabs(dl - center) > half) {
+      continue;
+    }
+    bool skip = false;
+    for (double m : skip_mhz) {
+      skip |= fabs(dl / 1e6 - m) < 0.35;
+    }
+    if (skip) {
+      continue;
+    }
+    probed++;
+    float psr = 0;
+    int   pci = probe_earfcn(rx, e, center, dl * ppm * 1e-6, &psr);
+    if (pci >= 0) {
+      hits.push_back({e, pci, psr});
+    }
+  }
+  // a carrier can also pass PSS/SSS and even the PBCH CRC a few raster points
+  // (100-300 kHz) away: of hits within 3 EARFCNs keep the strongest
+  std::vector<int> cells;
+  for (size_t i = 0; i < hits.size(); i++) {
+    bool best = true;
+    for (size_t j = 0; j < hits.size(); j++) {
+      if (j != i && abs(hits[j].earfcn - hits[i].earfcn) <= 3 &&
+          (hits[j].psr > hits[i].psr || (hits[j].psr == hits[i].psr && j < i))) {
+        best = false;
+      }
+    }
+    printf("%s %d %d (PSR %.1f)\n", best ? "found" : "alias", hits[i].earfcn, hits[i].pci, hits[i].psr);
+    if (best) {
+      cells.push_back(hits[i].earfcn);
+    }
+  }
+  printf("scan: %d EARFCNs probed, %zu cells, in %.1f s\n", probed, cells.size(), now_s() - t0);
+  for (int e : cells) {
+    std::string log = prefix + "." + std::to_string(e) + ".log";
+    double      dl  = srsran_band_fd(e) * 1e6;
+    const char* st  = run_carrier(rx, args, e, gain, dl * ppm * 1e-6, log.c_str(), center);
+    printf("done %d %s\n", e, st);
+  }
+  rx.from_buf = false;
+  printf("scan done (%.1f s)\n", now_s() - t0);
+}
+
+// "wide <center_hz> <seconds> <gain> <earfcn> <offset_hz> <log> [<earfcn> <offset_hz> <log> ...]"
+static void wide_command(rx_t& rx, const args_t& args, const std::string& line)
+{
+  std::istringstream in(line);
+  std::string        word;
+  double             center = 0, seconds = 0;
+  float              gain   = 0;
+  in >> word >> center >> seconds >> gain;
+  struct carrier_t {
+    int         earfcn;
+    double      offset;
+    std::string log;
+  };
+  std::vector<carrier_t> carriers;
+  carrier_t              c;
+  while (in >> c.earfcn >> c.offset >> c.log) {
+    carriers.push_back(c);
+  }
+  bool ok = !in.bad() && center > 0 && seconds > 0 && capture(rx, center, gain, seconds);
+  double t0 = now_s();
+  for (auto& k : carriers) {
+    const char* status = "error";
+    if (ok && !go_exit) {
+      rx.from_buf = true;
+      status      = run_carrier(rx, args, k.earfcn, gain, k.offset, k.log.c_str(), center);
+      rx.from_buf = false;
+    }
+    printf("done %d %s\n", k.earfcn, status);
+  }
+  printf("wide: %zu carriers decoded from the capture in %.1f s\n", carriers.size(), now_s() - t0);
 }
 
 int main(int argc, char** argv)
@@ -618,8 +891,16 @@ int main(int argc, char** argv)
 
   int ret = 0;
   if (args.server) {
-    char line[1024];
+    char line[8192];
     while (!go_exit && fgets(line, sizeof(line), stdin)) {
+      if (strncmp(line, "wide ", 5) == 0) {
+        wide_command(rx, args, line);
+        continue;
+      }
+      if (strncmp(line, "scan ", 5) == 0) {
+        scan_command(rx, args, line);
+        continue;
+      }
       int    earfcn = -1;
       float  gain   = args.gain;
       double offset = 0;

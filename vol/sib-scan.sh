@@ -24,10 +24,14 @@ show_help () {
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
           only: -d soapy -a driver=hackrf; needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
+          With -d bladeRF (lte_sib_decoder): the band is captured in ~23 MHz
+          pieces (2 s each) and every EARFCN of each capture is searched and
+          decoded from the same samples; -p auto is measured from the CFO
   -w      with -S: also run srsue on carriers >= 16 MHz wide (20 MHz cells).
           By default they are saved as detection-only readings (PCI and
           bandwidth, no SIBs): a HackRF (20 MSPS) cannot decode them
   -x      with -S: DL frequencies in MHz to skip, e.g. -x "796.0 806.0"
+          (bladeRF: EARFCNs within 0.35 MHz of them are not searched)
           (carriers already read in an overlapping band)
   -K      check a list of known EARFCNs for cells with PSS/SSS (HackRF,
           numpy), then run srsue only where there is one. EARFCNs advertised
@@ -119,6 +123,21 @@ dec_stop () {
   for _ in $(seq 10); do kill -0 $pid 2>/dev/null || break; sleep 1; done
   kill -9 $pid 2>/dev/null
   DEC_PID=""
+}
+
+# a carrier the decoder finished: save its log, note its CFO for -p auto
+dec_save () {
+  local e=$1 log=$2
+  local f
+  f=$(python3 $PY_PATH/earfcn_to_freq.py $e)
+  local cfo
+  cfo=$(sed -n 's/.*Found Cell:.*CFO=\([-0-9.]*\) KHz.*/\1/p' "$log" | tail -1)
+  if [[ -n ${ppm_from_cfo:-} && -n $cfo ]]; then
+    cfo_ppm+=($(python3 -c "print(round($cfo * 1e9 / $f, 2))"))
+  fi
+  # the log is complete: parse_save_sib stops at its "[decoder] done" line
+  python3 $PY_PATH/parse_save_sib.py -f "$log" -t 30 -T 30 -e "$e" -d "$database" \
+      -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$log" --detection decoder
 }
 
 # stop srsue. In a VM, kill -9 while srsue streams from a USB SDR made the
@@ -243,12 +262,18 @@ if [[ -n $known_list && $use_decoder -eq 1 && ${device_name,,} == "bladerf" ]]; 
   direct_known=1
 fi
 cfo_ppm=()
+# bladeRF + decoder with -S: no hackrf_sweep; the band is captured in ~23 MHz
+# pieces and lte_sib_decoder looks for cells on every EARFCN of each capture
+wide_scan=0
+if [[ $do_sweep -ne 0 && -z $known_list && $use_decoder -eq 1 && ${device_name,,} == "bladerf" ]]; then
+  wide_scan=1
+fi
 
-if [[ $do_sweep -ne 0 && -z $known_list ]]; then
+if [[ $do_sweep -ne 0 && -z $known_list && $wide_scan -eq 0 ]]; then
   # hackrf_sweep and the calibration run on a HackRF: with another SDR for srsue,
   # the HackRF's clock correction would be applied to the wrong radio
   if [[ ${device_name,,} != "soapy" || ${device_args,,} != *driver=hackrf* ]]; then
-    echo "-S needs a HackRF (-d soapy -a driver=hackrf); use -K with other SDRs"
+    echo "-S needs a HackRF (-d soapy -a driver=hackrf) or a bladeRF (-d bladeRF); use -K with other SDRs"
     exit 1
   fi
 fi
@@ -261,6 +286,10 @@ scan_id=$(python3 $PY_PATH/readings_db.py -d "$readings_database" new-scan \
 echo "scan id: $scan_id"
 trap 'dec_stop; python3 $PY_PATH/readings_db.py -d "$readings_database" end-scan "$scan_id"; rm -f $SRSUELOG $SRSUEOUT' EXIT
 
+if [[ $ppm == "auto" && $wide_scan -eq 1 ]]; then
+  ppm=0  # measured from the decoded cells' CFO instead (bladeRF: ~1 ppm)
+  ppm_from_cfo=1
+fi
 if [[ $ppm == "auto" && -z $known_list ]]; then
   if [[ -z $band ]]; then
     echo "-p auto needs band (-b)"
@@ -290,6 +319,13 @@ if [[ -n $known_list && $direct_known -eq 1 ]]; then
 elif [[ -n $known_list ]]; then
   earfcn_to_check=($known_list)
   initial_task="check_known"
+  do_cellsearch=0
+elif [[ $wide_scan -eq 1 ]]; then
+  if [[ -z $band ]]; then
+    echo "-S needs band (-b)"
+    exit 1
+  fi
+  initial_task="wide_scan"
   do_cellsearch=0
 elif [[ $do_sweep -ne 0 ]]; then
   if [[ -z $band ]]; then
@@ -458,14 +494,7 @@ while true; do
                 echo "$line"
                 [[ $line == "done $earfcn "* ]] && break
               done
-              # clock error from the cell's CFO (tuned without correction)
-              cfo_khz=$(sed -n 's/.*Found Cell:.*CFO=\([-0-9.]*\) KHz.*/\1/p' "$SRSUELOG" | tail -1)
-              if [[ -n ${ppm_from_cfo:-} && -n $cfo_khz ]]; then
-                cfo_ppm+=($(python3 -c "print(round($cfo_khz * 1e9 / $dl_freq, 2))"))
-              fi
-              # the log is complete: parse_save_sib stops at its "[decoder] done" line
-              python3 $PY_PATH/parse_save_sib.py -f "$SRSUELOG" -t 30 -T 30 -e "$earfcn" -d "$database" \
-                  -R "$readings_database" -I "$scan_id" -L "$location_file" -o "$SRSUELOG" --detection decoder
+              dec_save "$earfcn" "$SRSUELOG"
             else
               echo "[srsue] connecting to $earfcn"
               srsue $SRSUECFG --log.filename $SRSUELOG \
@@ -528,6 +557,44 @@ while true; do
                     fi
             done
             # if there is new earfcn's in earfcn_need_scan, "choose_earfcn_for_srsue" will find it
+            task="choose_earfcn_for_srsue"
+            continue ;;
+
+        "wide_scan")
+            dec_start || exit 1
+            found=()
+            while read -r centre lo hi; do
+              scan_gain=$rx_gain
+              if [[ -n $rx_gain_high && $centre -ge 1000000000 ]]; then
+                scan_gain=$rx_gain_high
+              fi
+              echo "[decoder] scanning EARFCN $lo-$hi (capture at $(( centre / 100000 ))00 kHz)"
+              echo "scan $centre 2 $scan_gain $lo $hi $ppm /tmp/wide.$$ $exclude_mhz" >&"${DEC[1]}"
+              while read -r -t 300 -u "${DEC[0]}" line; do
+                echo "$line"
+                if [[ $line =~ ^done\ ([0-9]+)\ ([a-z0-9]+) ]]; then
+                  e=${BASH_REMATCH[1]}
+                  dec_save "$e" "/tmp/wide.$$.$e.log"
+                  rm -f "/tmp/wide.$$.$e.log"
+                  earfcn_scanned+=($e)
+                  found+=($e)
+                fi
+                [[ $line == "scan done"* ]] && break
+              done
+            done < <(python3 $PY_PATH/wide_chunks.py -b "$band")
+            # the whole band was looked at: SIB5 neighbours outside it are decoded one by one
+            if [[ $no_requrse -eq 0 ]]; then
+              read -r band_lo band_hi < <(python3 $PY_PATH/band_to_earfcn.py "$band")
+              for f in "${found[@]}"; do
+                for e in $(python3 $PY_PATH/get_neigh.py -d "$database" -e "$f" 2>/dev/null); do
+                  if (( e < band_lo || e > band_hi )) && ! containsElement $e "${earfcn_scanned[@]}" &&
+                     ! containsElement $e "${earfcn_need_scan[@]}"; then
+                    echo "SIB5 of $f advertises $e: will decode it"
+                    earfcn_need_scan+=($e)
+                  fi
+                done
+              done
+            fi
             task="choose_earfcn_for_srsue"
             continue ;;
 
