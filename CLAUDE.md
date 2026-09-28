@@ -253,8 +253,9 @@ cannot be tested end-to-end without it.
        1.92 MSPS at stream start). bladerf_rx.patch: 32768-sample buffers →
        ~10% CPU, 20 MHz cell SIB1 after 11 s in the VM (temporary 15.36 MSPS
        arm64 default reverted). Web app runs (gain 15/40) before the fix: 13
-       cells, 15 min; 2nd run 9:10. Next: rebuild image, Portugal preset again
-       in the VM; re-measure bladeRF success rate on the x86 laptop.
+       cells, 15 min; 2nd run 9:10. After the fix (image rebuilt): 13/13 cells
+       with SIB1 incl. 5× 20 MHz, 9:37, gain 15/40. ✅ VM works with bladeRF.
+       Next: re-measure bladeRF success rate on the x86 laptop; HackRF in VM.
     b. **Direct MIB/SIB decoder instead of srsue**: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

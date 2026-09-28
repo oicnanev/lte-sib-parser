@@ -974,7 +974,9 @@ Changes in this fork, newest last, with the reason for each.
     `bladerf_rx.patch` now configures 32768-sample buffers (32 buffers, 16
     transfers), and decision 46 is reverted: 30.72 MSPS again on every
     platform, 20 MHz cells decoded with srsue in the VM (a 10 MHz cell: SIB1
-    after 12 s). The same small buffers were used natively and may explain
+    after 12 s). Portugal preset in the VM afterwards: 13 cells, all 13 with
+    SIB1 (5 of them 20 MHz), in 9:37; before the fix 6 of 13 in 15:06. The
+    same small buffers were used natively and may explain
     part of the random srsue failures with a bladeRF there (decision 36).
 
 ### Known limitations
