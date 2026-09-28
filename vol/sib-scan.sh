@@ -18,7 +18,7 @@ show_help () {
   -s      start earfcn
   -e      end earfcn
   -S      find carriers with hackrf_sweep instead of cell_search (HackRF
-          only, needs -b). With numpy the exact EARFCN is found with PSS/SSS,
+          only: -d soapy -a driver=hackrf; needs -b). With numpy the exact EARFCN is found with PSS/SSS,
           otherwise each carrier is tried on the 3 closest EARFCNs.
   -w      with -S: also run srsue on carriers >= 16 MHz wide (20 MHz cells).
           By default they are saved as detection-only readings (PCI and
