@@ -231,4 +231,26 @@ cannot be tested end-to-end without it.
 21. ✅ Web app SDR selector (HackRF/bladeRF/Other) with defaults for the Cisco
     antennas the user always uses; README "Gain and antennas" explains other
     antennas/places need other values and how to measure them.
-22. Further goals: to be defined with the user.
+22. Next (agreed 2026-09-28), in this order:
+    a. **MacBook Pro M4**: Docker Desktop on macOS cannot pass USB devices to
+       containers → Ubuntu 24.04 arm64 VM (Parallels, or UTM) with USB
+       passthrough, our Docker setup inside. Steps: hackrf_info in the VM;
+       bladeRF must show 5000M in `lsusb -t` (USB 3 passthrough); `docker compose
+       build` (arm64, srsRAN uses NEON); one srsue test per SDR counting
+       overflows (bladeRF 30.72 MSPS ≈ 123 MB/s over virtual USB is the risk);
+       web app binds 127.0.0.1 of the VM (browser in the VM, or add a bind option).
+    b. **Direct MIB/SIB decoder instead of srsue**: srsue is a whole UE (~9 s
+       start-up per cell, camps on one cell). Build a small C program on
+       libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1
+       with SI-RNTI): PSS/SSS → PBCH/MIB → PCFICH/PDCCH (SI-RNTI) → PDSCH → SIB1 and
+       SI messages, output JSON like srsue's "Content:" lines so
+       parse_save_sib/readings_db stay. Estimate (unmeasured): ~8 s per carrier,
+       Portugal preset ~2 min instead of 5.5. Prototype and measure first.
+    c. **Wideband bladeRF capture**: one capture up to ~56 MHz covering several
+       carriers of a band (e.g. most of B1/B3), digital down-conversion per
+       carrier, decode all from the same samples; also all cells (PCIs) on a
+       carrier, not just the strongest.
+    d. **2G (GSM)**: gr-gsm / kalibrate-style BCCH decoding (system information
+       types 1-4: MCC/MNC/LAC/CI) into the same readings table (add a RAT column).
+    Out of scope by the user's choice: Wi-Fi, Bluetooth, 3G.
+23. Further goals: to be defined with the user.
