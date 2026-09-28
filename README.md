@@ -187,7 +187,9 @@ usage: sib-scan.sh [OPTION]...
   -g      rx gain (default: 30)
   -G      rx gain for EARFCNs at 1 GHz and above (default: same as -g)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
-          (the ratio to the cell's sample rate must be an integer)
+          (the ratio to the cell's sample rate must be an integer).
+          Default with -d bladeRF: 30.72e6 (sample-rate changes take ~4 s
+          on a bladeRF 2.0; 15 MHz cells, 23.04 MSPS, then fail)
   -p      frequency correction in ppm for SDR clock error, positive
           tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
           -p auto measures it on the band's LTE cells (HackRF, needs -b)
@@ -507,6 +509,10 @@ through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
   1.6 dB at 30, 12.5 dB at 15) and 40 above.
 - The PSS/SSS checks capture with `bladeRF-cli`, which must switch the AGC off
   before a manual gain is accepted.
+- **Fixed 30.72 MSPS** (`-r 30.72e6`, the default with `-d bladeRF`): changing
+  the AD9361's sample rate is slow (see decision 39), so the hardware stays at
+  30.72 MSPS and srsue decimates in software. 15 MHz cells (23.04 MSPS, not an
+  integer divisor) would fail; none is on the Portuguese list.
 - Sweep mode (`-S`) uses `hackrf_sweep` and stays HackRF-only; use `-K`.
 - **Use `-t 45`**: srsue takes ~10 s longer to start on a bladeRF, and with
   `-t 30` some cells that decode fine by hand (B3 1875, B7 2800) ran out of
@@ -809,6 +815,22 @@ Changes in this fork, newest last, with the reason for each.
     `bladerf_rx.patch` now leaves TX unconfigured and disabled when RX starts;
     the only remaining enable is in the send path, which `rx_only.patch` makes
     unreachable.
+
+39. **bladeRF at a fixed 30.72 MSPS.** Per cell, srsue searches at 1.92 MSPS
+    and decodes at 15.36 or 30.72 MSPS. On a bladeRF 2.0 each change
+    reconfigures the AD9361: measured with `bladeRF-cli`, 1.56 s to 1.92 MSPS,
+    0.60 s to 15.36 MSPS, ~0.35 s per filter bandwidth, 4.1 s for a full
+    1.92 → 15.36 cycle (near instant on a HackRF). The time between MIB and the
+    first frame at the decoding rate was ~2.9 s, and when the cell was lost
+    srsue paid the cycle again. With `--rf.srate 30.72e6` the hardware rate
+    never changes and srsRAN's radio decimates in software (integer ratios for
+    1.4/3/5/10/20 MHz cells). srsRAN's bladeRF plugin then failed ("Error
+    receiving samples"): with 16x decimation the radio asks for up to 153600
+    samples per read, more than its 122880-sample conversion buffer, so
+    `bladerf_rx.patch` now reads in pieces. Measured: SIB1 9.2 s after start on
+    a B20 cell (it had timed out or taken ~12–13 s), 10.6 s instead of 11.3 s
+    on a 20 MHz B1 cell. The remaining ~9 s per cell before the search starts
+    is srsue start-up (PHY init ~6.5 s), the same with a HackRF.
 
 ### Known limitations
 

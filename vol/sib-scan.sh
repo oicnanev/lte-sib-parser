@@ -8,7 +8,9 @@ show_help () {
   -g      rx gain (default: 30)
   -G      rx gain for EARFCNs at 1 GHz and above (default: same as -g)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
-          (the ratio to the cell's sample rate must be an integer)
+          (the ratio to the cell's sample rate must be an integer).
+          Default with -d bladeRF: 30.72e6 (sample-rate changes take ~4 s
+          on a bladeRF 2.0; 15 MHz cells, 23.04 MSPS, then fail)
   -p      frequency correction in ppm for SDR clock error, positive
           tunes higher (e.g. a HackRF whose clock is 20 ppm slow: -p 20)
           -p auto measures it on the band's LTE cells (HackRF, needs -b)
@@ -259,6 +261,13 @@ if  [[ $do_cellsearch -ne 0 ]] &&
     exit 1
 fi
 
+
+# bladeRF 2.0: changing the AD9361 sample rate takes seconds (1.92 MSPS alone
+# ~1.6 s), and srsue changes it twice per cell; keep the hardware at 30.72 MSPS
+# and let srsue decimate in software (1.92/7.68/15.36/30.72 are integer ratios)
+if [[ ${#srate_args[@]} -eq 0 && ${device_name,,} == "bladerf" ]]; then
+  srate_args=(--rf.srate 30.72e6)
+fi
 
 # retry srsue only where PSS/SSS confirmed a cell: -K always, -S when refined
 if [[ -z $retries ]]; then
