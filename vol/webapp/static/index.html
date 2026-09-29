@@ -38,6 +38,7 @@
             <option value="sweep">Sweep (HackRF, bladeRF)</option>
             <option value="cell_search">cell_search</option>
             <option value="list">EARFCN list</option>
+            <option value="gsm">2G only (GSM 900/1800)</option>
           </select>
         </label>
         <label class="for-band">Band
@@ -90,7 +91,8 @@
             <input name="T" type="number" value="30" min="5">
           </label>
         </div>
-        <label class="check"><input name="recursive" type="checkbox"> Follow SIB5 neighbours</label>
+        <label class="check for-lte"><input name="recursive" type="checkbox"> Follow SIB5 neighbours</label>
+        <label class="check for-lte" title="after LTE: wide captures of GSM-900 and DCS-1800 (bladeRF or HackRF), ~30 s with a bladeRF"><input name="gsm" type="checkbox"> Also 2G (GSM 900/1800)</label>
         <div class="buttons">
           <button type="submit" id="run">Run</button>
           <button type="button" id="stop" disabled>Stop</button>
@@ -145,10 +147,10 @@
           <thead>
             <tr>
               <th data-sort="time">Time</th><th data-sort="band">Band</th><th data-sort="freq">Frequency</th>
-              <th data-sort="bw">BW</th><th data-sort="earfcn">EARFCN</th><th data-sort="pci">PCI</th>
-              <th data-sort="cgi">CGI</th><th data-sort="plmns">PLMNs</th><th data-sort="tac">TAC</th>
+              <th data-sort="bw">BW</th><th data-sort="earfcn" title="EARFCN (LTE) or ARFCN (GSM)">(E)ARFCN</th><th data-sort="pci" title="PCI (LTE) or BSIC (GSM)">PCI/BSIC</th>
+              <th data-sort="cgi">CGI</th><th data-sort="plmns">PLMNs</th><th data-sort="tac" title="TAC (LTE) or LAC (GSM)">TAC/LAC</th>
               <th data-sort="enb">eNB</th><th data-sort="cell">Cell</th><th data-sort="rsrp">RSRP</th>
-              <th data-sort="sibs">SIBs</th><th data-sort="location">Location</th>
+              <th data-sort="sibs">SIBs / SIs</th><th data-sort="location">Location</th>
             </tr>
           </thead>
           <tbody></tbody>

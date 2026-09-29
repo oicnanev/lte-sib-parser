@@ -2,7 +2,9 @@
 
 Passively finds LTE cells and decodes their broadcast system information
 (MIB, SIB1–SIB13) with an SDR, storing everything in SQLite. It combines
-srsRAN's `cell_search` with a patched, **receive-only** `srsue`.
+srsRAN's `cell_search` with a patched, **receive-only** `srsue` (and, with a
+bladeRF, its own decoder). GSM cells (2G, 900/1800 MHz) are read too: see
+[2G (GSM)](#2g-gsm).
 
 This is a fork of [godfuzz3r/lte-sib-parser](https://github.com/godfuzz3r/lte-sib-parser)
 that adds HackRF One support, fixes srsue transmitting, adds a sweep-based
@@ -330,7 +332,8 @@ keeps it (e.g. `http://localhost:8080/?view=38.708,-9.137,17`), and
   list of cells.
 - **Readings table**: time, band, downlink frequency, bandwidth, EARFCN, PCI,
   CGI, PLMNs, TAC, eNB ID, cell ID, RSRP, decoded SIBs (or *detected only*) and
-  location, updated live. Click a column header to sort by it, click again to
+  location, updated live. GSM cells share the columns: ARFCN, BSIC, LAC and
+  their SI messages. Click a column header to sort by it, click again to
   reverse (▲/▼); empty values always go last and the choice is remembered; filter by scan; click a row
   for every field and the full MIB/SIB contents.
 
@@ -455,6 +458,48 @@ Moving the project folder requires running the install script again. Stop a
 web app started by hand (`docker compose stop webapp`) before installing, or
 the two will compete for port 8080.
 
+## 2G (GSM)
+
+`vol/scripts/gsm_scan.py` reads every GSM cell of GSM-900 (E-GSM, 925–960
+MHz) and DCS-1800 (1805–1880 MHz) from a few wide captures: BSIC, MCC/MNC,
+LAC, cell ID (CI) and the system information messages (SI1, SI2 with the
+neighbour list, SI3, SI4, SI13, SI2bis/ter/quater), one reading per cell in
+the [readings database](#readings-database). Nothing is transmitted.
+
+- **Web app**: mode *2G only (GSM 900/1800)*, or tick **Also 2G** to run it
+  after any LTE scan (e.g. the known-EARFCN preset). Needs the SDR set to
+  bladeRF or HackRF.
+- **Command line** (inside the container):
+  ```bash
+  python3 scripts/gsm_scan.py                          # bladeRF, both bands
+  python3 scripts/gsm_scan.py --sdr hackrf --ppm 17    # HackRF: pass its clock error
+  python3 scripts/gsm_scan.py --bands 900 --gain-low 20
+  ```
+- **bladeRF**: 56 MSPS with a 50 MHz filter, so GSM-900 is one capture and
+  DCS-1800 two, 1.2 s each; each capture is recorded while the previous one
+  is decoded. Default gains 15 (900) and 30 (1800), for a Cisco LTE antenna
+  (40 clipped at 1.8 GHz next to strong LTE carriers); a warning is printed
+  when more than 0.2 % of the samples clip.
+- **HackRF**: 20 MSPS, 3 + 5 captures; gains `24,16` / `32,20` (lna,vga,
+  `LTE_HACKRF_LOW_GAIN` is honoured below 1 GHz). Give its clock error with
+  `--ppm` (the web app passes the one measured by the LTE steps); without it
+  the FCCH search covers ±45 kHz. **Not yet tested with a HackRF.**
+- **Time**: ~29 s for both bands with a bladeRF on a 4-core i7-8550U (captures
+  ~12 s, decoding overlapped); 29–33 cells, most with the full CGI, at a site
+  with three operators on GSM-900 and one on DCS-1800.
+- Captures and channel buffers go to `/dev/shm` (docker-compose gives the
+  containers 2 GB; `/tmp` otherwise): two captures of 280 MB plus up to
+  ~300 MB of channel buffers at a time.
+- `vol/scripts/gsm_decode.py` also decodes a capture file:
+  `gsm_decode.py file.iq -f 942.5e6 -r 56e6 -w 50e6 -b 900` (`--int8` for a
+  HackRF file), one JSON line per cell.
+
+Limits: SI2 neighbour lists are decoded only in the "bit map 0" format
+(GSM-900); other formats (range 128/256/512/1024, variable bit map, used on
+DCS-1800) are kept as hex. The level is in dBFS, not dBm (not calibrated).
+Cells weaker than ~-70 dBFS give the BSIC but often no SI3 in 1.2 s. 3G is
+not supported.
+
 ## Readings database
 
 `vol/output/readings.sqlite` (option `-R`) keeps every reading instead of one
@@ -479,14 +524,17 @@ Table `readings`:
 | `cgi` | cell global identity `MCC-MNC-ECI`, as phones show it (e.g. `268-02-26040502`) |
 | `rsrp` | reference signal received power, dBm |
 | `bandwidth_mhz` | channel bandwidth: from the MIB when decoded, else estimated by the sweep |
-| `detection` | `srsue` (decoded) or `pss` (found by its sync signals only, see below) |
+| `detection` | `srsue` or `decoder` (decoded), `pss` (found by its sync signals only, see below), `gsm` |
+| `rat` | empty for LTE; `GSM` for a 2G cell, whose ARFCN is in `earfcn`, BSIC in `pci`, LAC in `tac`, CI in `cell_id`, CGI `MCC-MNC-LAC-CI` in `cgi`, band `GSM900`/`DCS1800` |
+| `gsm` | 2G: BSIC, level (dBFS), frequency error and every decoded SI message (JSON: hex plus the parsed fields) |
 | `lat`, `lon`, `accuracy_m`, `location_source`, `location_time` | position of the reading (see [Location](#location)) |
 | `mib`, `sib1` … `sib13` | decoded messages as JSON, as in `cells.sqlite` |
 
 A `pss` reading is a carrier the sweep found and identified (EARFCN, PCI,
 bandwidth, location) but did not decode, because the SDR cannot follow it: with
 a HackRF, 20 MHz cells. It has no RSRP, CGI or SIBs. Columns added later
-(`bandwidth_mhz`, `detection`) are added to older databases automatically.
+(`bandwidth_mhz`, `detection`, `rat`, `gsm`) are added to older databases
+automatically. GSM readings are left out of the learned EARFCNs.
 
 ```bash
 sqlite3 vol/output/readings.sqlite "SELECT time, earfcn, pci, cgi, rsrp, lat, lon FROM readings"
@@ -634,6 +682,8 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/readings_db.py` | readings database schema, SIB1 → CGI decoding, `new-scan`/`set-ppm`/`end-scan` commands |
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
 | `vol/webapp/server.py` | the web app (`--port`, `--db` readings database, `--learned` learned-EARFCN file) |
+| `vol/scripts/gsm_scan.py [--sdr hackrf] [--bands 900 1800]` | 2G scan: GSM-900/DCS-1800 cells into the readings database (see [2G (GSM)](#2g-gsm)) |
+| `vol/scripts/gsm_decode.py <file.iq> -f <Hz> -r <rate>` | decode every GSM BCCH in a capture file (library used by `gsm_scan.py`) |
 | `vol/scripts/wide_chunks.py -b <band>` | split a band into the wide captures used by `sib-scan.sh -S` with a bladeRF (centre and EARFCN range per capture) |
 | `vol/scripts/check_earfcns.py -e "<earfcns>"` | check EARFCNs for cells with PSS/SSS, measure the clock (`-p auto`) |
 | `vol/webapp/demo/make_demo_db.py <db>` | readings database with fictitious data (test PLMN 001-01), for demos and screenshots |
@@ -1083,6 +1133,52 @@ Changes in this fork, newest last, with the reason for each.
     carriers, three rounds: 15 of 18 complete (before: most rounds had several
     carriers with MIB or SIB1 only). Portugal known-EARFCN preset: 1:22, 16
     cells, 15 with SIB1 and 14 with every SIB (B7 2950 gives only the MIB).
+
+51. **2G (GSM) with a numpy decoder on wide captures** (`gsm_scan.py`,
+    `gsm_decode.py`). gr-gsm is not packaged for Ubuntu 22.04 and would pull
+    GNU Radio into the image, and gr-osmosdr links the distribution's
+    libbladeRF 2.4.1, which does not work with this board (decision 34). So
+    the decoder is written from the specifications (3GPP 45.002/45.003/44.018)
+    in Python with numpy, and captures come from `bladeRF-cli` /
+    `hackrf_transfer` like the PSS/SSS checks. Chain per capture:
+    - **Filter bank**: overlap-save FFT (1/8 overlap), each 200 kHz channel
+      filtered (flat to 80 kHz, cosine to 130 kHz) and resampled exactly to
+      2 samples per symbol (block sizes with B/M = rate/541.67 kHz). Blocks of
+      ~86 k samples: the first version used 2.7 M and its FFTs did not fit in
+      the CPU cache (8 processes were no faster than 2).
+    - **FCCH**: the tone at +67.7 kHz, found with a differential detector
+      (insensitive to a small frequency error; a coherent one lost the tone at
+      1 kHz error). GMSK data also gives coherence ~0.7 at phase -45°, so only
+      the real part counts (threshold 0.85). LTE carriers still give tone-like
+      hits, so hits count only when another one is 10, 11, 20, 21 … 51 frames
+      away (FCCH frames of the 51-multiframe), and at least 40 % of them must.
+      A 0.4 s look at every channel picks the ones worth channelising in full
+      (~50 of 174 on GSM-900).
+    - **Frequency error** from the FFT peak of the tone around each FCCH (the
+      phase of w[n]w*[n-1] was biased by GMSK samples in the window: −4 to −13
+      kHz instead of +1 kHz on weak channels, which broke everything after).
+    - **SCH**: BSIC and frame number; two SCH must agree (same BSIC, frame
+      numbers matching the time between them): its 10-bit parity alone passed
+      by chance on LTE carriers.
+    - **BCCH** on frames 2–5 of every 51-multiframe: least-squares channel
+      estimate on the training sequence (5 taps, all timing offsets at once),
+      max-log BCJR equaliser (soft bits, batched over all bursts of a
+      channel), deinterleaving, soft Viterbi (K=5) and the Fire code check.
+    Captures: 1.2 s (0.8 s: 17 cells with CI, 1.2 s and 1.6/2 s: 25), at 56
+    MSPS so GSM-900 fits in one (2 s at 40 MSPS, 38 MHz filter: 20 cells; at
+    56 MSPS: 28).
+    The next capture is recorded while the previous one is decoded; once a
+    `bladeRF-cli` capture started during a decode stopped after a few ms and
+    never returned, so a capture that takes 15 s longer than it should is
+    recorded again. Speed on the i7-8550U (GSM-900 capture): first version
+    88 s, parallel channels 21 s, then cache-sized blocks, FCCH look-ahead and
+    batched equaliser ~11 s. GSM readings reuse the LTE columns (ARFCN in
+    `earfcn`, BSIC in `pci`, LAC in `tac`, CI in `cell_id`) with `rat = 'GSM'`,
+    so the web app's table, map and filters work unchanged; the learned-EARFCN
+    list and `-x` skip them. The GSM step runs after the LTE ones in the web
+    app so that a HackRF's measured clock error can be passed on. Measured:
+    Portugal known-EARFCN preset + 2G with the bladeRF, 2:22 in total (LTE 16
+    cells in 1:53, GSM 33 cells, 23 with CGI, in 29 s).
 
 ### Known limitations
 

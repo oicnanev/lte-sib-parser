@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS readings (
     cgi TEXT,                       -- MCC-MNC-ECI of the first PLMN
     rsrp REAL,                      -- dBm
     bandwidth_mhz REAL,             -- from the MIB, or estimated by the sweep
-    detection TEXT,                 -- srsue or decoder (decoded), pss (sync signals only)
+    detection TEXT,                 -- srsue or decoder (decoded), pss (sync signals only), gsm
+    rat TEXT,                       -- NULL = LTE; GSM: earfcn = ARFCN, pci = BSIC, tac = LAC,
+                                    -- cell_id = CI, cgi = MCC-MNC-LAC-CI
+    gsm TEXT,                       -- GSM: BSIC, level, system information (JSON)
     lat REAL,
     lon REAL,
     accuracy_m REAL,
@@ -61,7 +64,8 @@ def now():
 
 
 # columns added after the first release: added to older databases on connect
-MIGRATIONS = [("readings", "bandwidth_mhz", "REAL"), ("readings", "detection", "TEXT")]
+MIGRATIONS = [("readings", "bandwidth_mhz", "REAL"), ("readings", "detection", "TEXT"),
+              ("readings", "rat", "TEXT"), ("readings", "gsm", "TEXT")]
 
 # MIB dl-Bandwidth -> channel bandwidth in MHz
 MIB_BANDWIDTH = {"n6": 1.4, "n15": 3, "n25": 5, "n50": 10, "n75": 15, "n100": 20}

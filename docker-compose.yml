@@ -2,6 +2,8 @@ x-sdr: &sdr
   build: ./worker/
   image: lte-sib-parser-worker
   privileged: true
+  # gsm_scan.py keeps its wide captures and channel buffers in /dev/shm (64 MB by default)
+  shm_size: "2gb"
   # reap orphaned children (srsue, hackrf_*) when a scan is stopped
   init: true
   cap_add:

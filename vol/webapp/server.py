@@ -30,6 +30,7 @@ import readings_db  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 SIB_SCAN = os.path.join(VOL, "sib-scan.sh")
+GSM_SCAN = os.path.join(VOL, "scripts", "gsm_scan.py")
 READINGS_DB = os.path.join(VOL, "output", "readings.sqlite")
 CELLS_DB = os.path.join(VOL, "output", "cells.sqlite")
 # EARFCNs learned from readings (read, or advertised in SIB5): kept apart from the
@@ -182,7 +183,7 @@ def gps_staleness_thread():
 # --- readings database ---
 
 SUMMARY_COLS = ("id, scan_id, time, updated, earfcn, band, dl_freq_mhz, pci, mcc, mnc, plmns, "
-                "tac, eci, enb_id, cell_id, cgi, rsrp, bandwidth_mhz, detection, lat, lon, accuracy_m, location_source, "
+                "tac, eci, enb_id, cell_id, cgi, rsrp, bandwidth_mhz, detection, rat, gsm, lat, lon, accuracy_m, location_source, "
                 "location_time, mib IS NOT NULL AS has_mib, "
                 + ", ".join("%s IS NOT NULL AS has_%s" % (s, s) for s in readings_db.SIBS))
 
@@ -190,6 +191,12 @@ SUMMARY_COLS = ("id, scan_id, time, updated, earfcn, band, dl_freq_mhz, pci, mcc
 def summarize(row):
     d = dict(row)
     d["sibs"] = [int(s[3:]) for s in readings_db.SIBS if d.pop("has_" + s)]
+    # GSM: names of the system information messages decoded, not the whole JSON
+    gsm = d.pop("gsm")
+    try:
+        d["gsm_si"] = sorted(json.loads(gsm)["si"]) if gsm else []
+    except (ValueError, KeyError):
+        d["gsm_si"] = []
     return d
 
 
@@ -215,7 +222,7 @@ def get_reading(rid):
     if not row:
         return None
     d = dict(row)
-    for k in ["mib"] + readings_db.SIBS:
+    for k in ["mib", "gsm"] + readings_db.SIBS:
         if d.get(k):
             try:
                 d[k] = json.loads(d[k])
@@ -294,14 +301,23 @@ def job_thread(steps, ppm, env=None):
     for i, (band, args) in enumerate(steps):
         if hub.stop_requested:
             break
-        a = list(args) + (["-p", ppm] if ppm else [])
-        if done_mhz and "-S" in a:
-            a += ["-x", " ".join("%.1f" % f for f in sorted(set(done_mhz)))]
+        if band == "2G":
+            # gsm_scan.py: HackRF clock error from the LTE steps' calibration
+            a = list(args)
+            if "hackrf" in a and ppm and ppm != "auto":
+                a += ["--ppm", ppm]
+            cmd = ["python3", "-u", GSM_SCAN] + a
+            hub.add_log("[webapp] gsm_scan.py " + " ".join(a))
+        else:
+            a = list(args) + (["-p", ppm] if ppm else [])
+            if done_mhz and "-S" in a:
+                a += ["-x", " ".join("%.1f" % f for f in sorted(set(done_mhz)))]
+            cmd = ["bash", SIB_SCAN] + a
+            hub.add_log("[webapp] ./sib-scan.sh " + " ".join(a))
         hub.set_status(step="%d/%d" % (i + 1, len(steps)) if len(steps) > 1 else None,
                        band=band, scan_id=None, task="starting", earfcn=None,
                        band_started=readings_db.now())
-        hub.add_log("[webapp] ./sib-scan.sh " + " ".join(a))
-        proc = subprocess.Popen(["bash", SIB_SCAN] + a, cwd=VOL, env=env, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, cwd=VOL, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1,
                                 start_new_session=True)
         hub.proc = proc
@@ -311,7 +327,7 @@ def job_thread(steps, ppm, env=None):
         if sid:
             with db() as conn:
                 done_mhz += [r[0] for r in conn.execute(
-                    "SELECT dl_freq_mhz FROM readings WHERE scan_id = ? "
+                    "SELECT dl_freq_mhz FROM readings WHERE scan_id = ? AND rat IS NULL "
                     "AND (mib IS NOT NULL OR detection = 'pss')", (sid,))
                     if r[0] is not None]
         hub.add_log("[webapp] band %s finished (exit code %s)" % (band, code) if band
@@ -359,6 +375,8 @@ def build_job(p):
     """
     mode = p.get("mode", "sweep")
     table = bands_table()
+    if mode == "gsm":
+        return [gsm_step(p)], ""
 
     band = str(p.get("band", "")).strip()
     if band in PRESETS and "earfcns_file" in PRESETS[band]:
@@ -437,6 +455,18 @@ def build_job(p):
     return steps, ppm
 
 
+def gsm_step(p):
+    """("2G", gsm_scan.py args): GSM-900 and DCS-1800 with the form's SDR"""
+    device, dev_args = p.get("device", "soapy"), str(p.get("device_args", "")).lower()
+    if device == "bladeRF":
+        sdr = "bladerf"
+    elif device == "soapy" and "driver=hackrf" in dev_args:
+        sdr = "hackrf"
+    else:
+        raise BadRequest("2G needs a bladeRF or a HackRF (wide captures)")
+    return ("2G", ["--sdr", sdr, "-R", READINGS_DB, "-L", location.LOCATION_FILE])
+
+
 def seed_earfcns(filename):
     """EARFCNs of a preset's list file (numbers at the start of a line)"""
     out = []
@@ -476,7 +506,8 @@ def update_learned():
                 d["plmns"].append(p)
 
     with db() as conn:
-        rows = conn.execute("SELECT earfcn, time, bandwidth_mhz, plmns, sib5 FROM readings").fetchall()
+        rows = conn.execute("SELECT earfcn, time, bandwidth_mhz, plmns, sib5 FROM readings "
+                            "WHERE rat IS NULL").fetchall()
     for e, t, bw, plmns, sib5 in rows:
         d = entry(e)
         d["first_seen"] = min(x for x in (d["first_seen"], t) if x)
@@ -583,6 +614,9 @@ def start_scan(params):
     if hub.status.get("running"):
         raise BadRequest("a scan is already running")
     steps, ppm = build_job(params)
+    # 2G after LTE: a HackRF's clock error is known by then
+    if params.get("gsm") and params.get("mode") != "gsm":
+        steps = steps + [gsm_step(params)]
     env = scan_env(params)
     with hub.lock:
         hub.log.clear()

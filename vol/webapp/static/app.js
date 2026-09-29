@@ -98,6 +98,13 @@ function rsrpColor(rsrp) {
   return "#dc2626";
 }
 
+// LTE bands are numbers (B20), GSM ones names (GSM900)
+const bandLabel = (b) => (/^\d+$/.test(String(b)) ? `B${b}` : String(b ?? ""));
+const isGsm = (r) => r.rat === "GSM";
+const decodedText = (r) => isGsm(r)
+  ? (r.gsm_si.length ? "SI " + r.gsm_si.map((k) => k.slice(2)).join(" ") : "BSIC only")
+  : r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
+
 function drawReadings() {
   readingsLayer.clearLayers();
   // one marker per place (≈1 m), listing every cell read there
@@ -115,7 +122,8 @@ function drawReadings() {
       fillColor: rsrpColor(best > -200 ? best : null), fillOpacity: 0.85,
     });
     const rows = list.map((r) =>
-      `<tr><td>B${esc(r.band)}</td><td>${esc(r.dl_freq_mhz ?? "")} MHz</td><td>${esc(r.earfcn)}</td><td>PCI ${esc(r.pci ?? "?")}</td>` +
+      `<tr><td>${esc(bandLabel(r.band))}</td><td>${esc(r.dl_freq_mhz ?? "")} MHz</td><td>${esc(r.earfcn)}</td>` +
+      `<td>${isGsm(r) ? "BSIC" : "PCI"} ${esc(r.pci ?? "?")}</td>` +
       `<td>${esc(r.cgi ?? (r.detection === "pss" ? "detected only" : ""))}</td>` +
       `<td>${r.rsrp != null ? esc(r.rsrp) + " dBm" : ""}</td></tr>`).join("");
     m.bindPopup(`<b>${list.length} reading(s)</b><br>${esc(list[0].location_source ?? "")}` +
@@ -230,7 +238,7 @@ const SORT_KEYS = {
   enb: (r) => r.enb_id,
   cell: (r) => r.cell_id,
   rsrp: (r) => r.rsrp,
-  sibs: (r) => (r.detection === "pss" ? -1 : r.sibs.length + (r.has_mib ? 1 : 0)),
+  sibs: (r) => (isGsm(r) ? r.gsm_si.length : r.detection === "pss" ? -1 : r.sibs.length + (r.has_mib ? 1 : 0)),
   location: (r) => (r.location_source != null ? `${r.location_source} ${r.lat}` : null),
 };
 // first click on a column: newest / strongest / most complete first, otherwise ascending
@@ -281,7 +289,7 @@ function renderTable(freshId) {
   showSortHeaders();
   const rows = filteredReadings().sort(compareReadings).map((r) => {
     const loc = r.lat != null ? `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)} (${esc(r.location_source)})` : "";
-    const sibs = r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
+    const sibs = decodedText(r);
     const time = new Date(r.time).toLocaleString();
     return `<tr data-id="${r.id}"${r.id === freshId ? ' class="fresh"' : ""}>` +
       `<td>${esc(time)}</td><td>${esc(r.band)}</td>` +
@@ -317,6 +325,7 @@ async function loadScans() {
 
 async function showDetail(id) {
   const r = await api(`/api/readings/${id}`);
+  if (r.rat === "GSM") return showGsmDetail(r);
   $("#detail-title").textContent = `EARFCN ${r.earfcn} · PCI ${r.pci ?? "?"} · ` +
     (r.cgi ?? (r.detection === "pss" ? "detected only" : "no SIB1"));
   const fields = [
@@ -335,6 +344,28 @@ async function showDetail(id) {
     .filter((k) => r[k] != null)
     .map((k) => `<details${k === "sib1" ? " open" : ""}><summary>${k.toUpperCase()}</summary>` +
       `<pre>${esc(JSON.stringify(r[k], null, 2))}</pre></details>`);
+  $("#detail-body").innerHTML = "<dl>" + fields.map(([k, v]) =>
+    `<dt>${esc(k)}</dt><dd>${esc(v ?? "")}</dd>`).join("") + "</dl>" + blocks.join("");
+  $("#detail").showModal();
+}
+
+function showGsmDetail(r) {
+  const g = r.gsm ?? {};
+  $("#detail-title").textContent = `ARFCN ${r.earfcn} · BSIC ${r.pci ?? "?"} · ${r.cgi ?? "no SI3"}`;
+  const fields = [
+    ["Time", r.time], ["Updated", r.updated], ["Scan", r.scan_id], ["Band", r.band],
+    ["DL frequency", r.dl_freq_mhz != null ? r.dl_freq_mhz + " MHz" : ""],
+    ["PLMN", r.plmns], ["LAC", r.tac], ["CI", r.cell_id],
+    ["Level", g.level_dbfs != null ? g.level_dbfs + " dBFS (relative, not calibrated)" : ""],
+    ["Detection", "GSM BCCH decoded by gsm_scan.py"],
+    ["Location", r.lat != null ? `${r.lat}, ${r.lon}` : ""],
+    ["Accuracy", r.accuracy_m != null ? Math.round(r.accuracy_m) + " m" : ""],
+    ["Location source", r.location_source], ["Location time", r.location_time],
+  ];
+  const si = g.si ?? {};
+  const blocks = Object.keys(si).sort().map((k) =>
+    `<details${k === "si3" ? " open" : ""}><summary>${esc(k.toUpperCase())}</summary>` +
+    `<pre>${esc(JSON.stringify(si[k], null, 2))}</pre></details>`);
   $("#detail-body").innerHTML = "<dl>" + fields.map(([k, v]) =>
     `<dt>${esc(k)}</dt><dd>${esc(v ?? "")}</dd>`).join("") + "</dl>" + blocks.join("");
   $("#detail").showModal();
@@ -370,11 +401,16 @@ try {
 } catch (e) {}
 applySdr(false);
 
+// "Also 2G" is remembered per browser
+try { form.gsm.checked = localStorage.getItem("gsm") === "1"; } catch (e) {}
+form.gsm.onchange = () => { try { localStorage.setItem("gsm", form.gsm.checked ? "1" : "0"); } catch (e) {} };
+
 function updateFormMode() {
   const mode = form.mode.value;
-  document.querySelector(".for-band").style.display = mode === "list" ? "none" : "";
+  document.querySelector(".for-band").style.display = mode === "list" || mode === "gsm" ? "none" : "";
   document.querySelector(".for-bands").style.display =
-    mode !== "list" && form.band.value === "custom" ? "" : "none";
+    mode !== "list" && mode !== "gsm" && form.band.value === "custom" ? "" : "none";
+  for (const el of document.querySelectorAll(".for-lte")) el.style.display = mode === "gsm" ? "none" : "";
   document.querySelector(".for-list").style.display = mode === "list" ? "" : "none";
 }
 form.mode.onchange = updateFormMode;
@@ -385,6 +421,7 @@ form.onsubmit = async (e) => {
   $("#form-error").textContent = "";
   const body = Object.fromEntries(new FormData(form));
   body.recursive = form.recursive.checked;
+  body.gsm = form.gsm.checked;
   try {
     await api("/api/scan", body);
   } catch (err) {
@@ -403,7 +440,7 @@ function showStatus(st) {
   $("#stop").disabled = !st.running;
   const parts = [];
   if (st.step) parts.push(`band ${st.step}`);
-  if (st.band) parts.push(`B${st.band}`);
+  if (st.band) parts.push(bandLabel(st.band));
   if (st.scan_id) parts.push(`scan #${st.scan_id}`);
   if (st.task) parts.push(st.task);
   if (st.earfcn) parts.push(`EARFCN ${st.earfcn}`);

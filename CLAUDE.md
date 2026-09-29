@@ -283,7 +283,18 @@ cannot be tested end-to-end without it.
        carriers of a band (e.g. most of B1/B3), digital down-conversion per
        carrier, decode all from the same samples; also all cells (PCIs) on a
        carrier, not just the strongest.
-    d. **2G (GSM)**: gr-gsm / kalibrate-style BCCH decoding (system information
-       types 1-4: MCC/MNC/LAC/CI) into the same readings table (add a RAT column).
+    d. ✅ **2G (GSM)** (2026-09-29): `vol/scripts/gsm_scan.py` + `gsm_decode.py`
+       (numpy, no gr-gsm: not packaged for 22.04, gr-osmosdr links libbladeRF
+       2.4.1). bladeRF 56 MSPS/50 MHz: GSM-900 one capture, DCS-1800 two, 1.2 s
+       each, next capture recorded while decoding. FFT filter bank (small
+       blocks: cache), FCCH differential detector (real part > 0.85) + hits
+       10/11/…/51 frames apart, CFO from the FFT peak of the tone, two SCH
+       that agree, LS channel estimate + batched max-log BCJR + soft Viterbi +
+       Fire code. ~29 s for both bands on the i7-8550U, 29-33 cells here
+       (GSM-900 3 operators, DCS-1800 1). Readings: rat='GSM', ARFCN in earfcn,
+       BSIC in pci, LAC in tac, CI in cell_id, JSON in `gsm`. Web app: mode
+       "2G only" and "Also 2G" (runs after LTE). HackRF path written, untested.
+       Gains bladeRF 15 (900) / 30 (1800; 40 clipped). Next ideas: SI2 range
+       formats, port the chain to C++ in lte_sib_decoder for speed.
     Out of scope by the user's choice: Wi-Fi, Bluetooth, 3G.
 23. Further goals: to be defined with the user.
