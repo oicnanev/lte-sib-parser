@@ -107,12 +107,14 @@ button.active { outline: 2px solid var(--accent); }
 .hint, .muted { color: var(--muted); font-size: 12px; }
 .loc { font-family: ui-monospace, monospace; margin: 0 0 8px; }
 
-#earfcns-card summary { cursor: pointer; list-style-position: inside; }
-#earfcns-card summary h2 { display: inline; margin: 0; }
+#earfcns-card summary, #log-details summary { cursor: pointer; list-style-position: inside; }
+#earfcns-card summary h2, #log-details summary h2 { display: inline; margin: 0; }
 .earfcn-wrap { max-height: 220px; }
-.log-card { flex: 1; display: flex; flex-direction: column; min-height: 160px; }
+/* closed: just its title; open: fills the rest of the column */
+.log-card:has(#log-details[open]) { flex: 1; display: flex; flex-direction: column; min-height: 160px; }
+#log-details[open] { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #log {
-  flex: 1; margin: 0; overflow: auto; background: var(--log-bg); color: var(--log-text);
+  flex: 1; margin: 8px 0 0; min-height: 140px; overflow: auto; background: var(--log-bg); color: var(--log-text);
   border-radius: 6px; padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all;
 }
 

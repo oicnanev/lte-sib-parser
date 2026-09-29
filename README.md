@@ -314,7 +314,9 @@ Open <http://localhost:8080>. It shows:
   for that SDR with a Cisco LTE antenna (see [Gain and antennas](#gain-and-antennas));
   every field stays editable and the choice is remembered.
   The band can also be a preset or a custom list, see [Several bands](#several-bands).
-- **Activity**: current task and EARFCN, and the scan's live output.
+- **Activity**: the scan's live output, in a panel that opens like Known
+  EARFCNs (closed by default; opening it jumps to the latest lines). The
+  current task and EARFCN are always shown in the header.
 - **Stopwatch** in the header: elapsed time of the run and of the current band
   while scanning, then `last run 13:46 (6 bands)`. The scan filter shows each
   band's duration.

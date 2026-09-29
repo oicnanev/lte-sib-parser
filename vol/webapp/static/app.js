@@ -461,6 +461,11 @@ function appendLog(lines) {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+// lines arrive while the panel is closed: show the latest ones when it opens
+$("#log-details").addEventListener("toggle", (e) => {
+  if (e.target.open) $("#log").scrollTop = $("#log").scrollHeight;
+});
+
 // ---------- known EARFCNs ----------
 
 async function loadEarfcns() {
