@@ -405,7 +405,8 @@ function showGsmDetail(r) {
     ["Time", r.time], ["Updated", r.updated], ["Scan", r.scan_id], ["Band", r.band],
     ["DL frequency", r.dl_freq_mhz != null ? r.dl_freq_mhz + " MHz" : ""],
     ["PLMN", r.plmns], ["LAC", r.tac], ["CI", r.cell_id],
-    ["Level", g.level_dbfs != null ? g.level_dbfs + " dBFS (relative, not calibrated)" : ""],
+    ["RSSI", r.rsrp != null ? r.rsrp + " dBm (BCCH carrier power, not calibrated: compare with other GSM readings, not with LTE RSRP)" : ""],
+    ["Level", g.level_dbfs != null ? g.level_dbfs + " dBFS (at the SDR, before the gain is taken out)" : ""],
     ["Detection", nsi ? "GSM BCCH decoded by gsm_scan.py"
       : "GSM cell found by its FCCH/SCH (BSIC), but no system information decoded: " +
         "weak signal or interference from a nearby channel. Not 3G: UMTS has no FCCH/SCH."],

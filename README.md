@@ -538,6 +538,14 @@ the [readings database](#readings-database). Nothing is transmitted.
 Limits: SI2 neighbour lists are decoded only in the "bit map 0" format
 (GSM-900); other formats (range 128/256/512/1024, variable bit map, used on
 DCS-1800) are kept as hex. The level is in dBFS, not dBm (not calibrated).
+Each GSM reading has an **RSSI** (the BCCH carrier's power, what a phone
+reports as RxLev) in dBm in the `rsrp` column, shown in the table's
+*RSRP / RSSI* column and exported: the level in dBFS minus the capture gain,
+with srsue's offset (`dBFS + 30 - (gain + 62)`, `readings_db.gsm_rssi`). It is
+not calibrated: compare GSM readings of one SDR with each other, not with the
+LTE RSRP, which srsRAN takes after an unnormalised FFT and comes out tens of dB
+higher (e.g. -35 dBm LTE next to -82 dBm GSM). Readings saved before it are
+filled in from their level and the scan's gain when the database is opened.
 Cells weaker than ~-70 dBFS give the BSIC but often no SI3 in 1.2 s; the web
 app shows them as "BSIC only (weak signal)" (or "no SI3" when other SI
 decoded). They are GSM cells, not 3G: the BSIC comes from the SCH, found via
@@ -578,7 +586,7 @@ Table `readings`:
 | `rsrp` | reference signal received power, dBm |
 | `bandwidth_mhz` | channel bandwidth: from the MIB when decoded, else estimated by the sweep |
 | `detection` | `srsue` or `decoder` (decoded), `pss` (found by its sync signals only, see below), `gsm` |
-| `rat` | empty for LTE; `GSM` for a 2G cell, whose ARFCN is in `earfcn`, BSIC in `pci`, LAC in `tac`, CI in `cell_id`, CGI `MCC-MNC-LAC-CI` in `cgi`, band `GSM900`/`DCS1800` |
+| `rat` | empty for LTE; `GSM` for a 2G cell, whose ARFCN is in `earfcn`, BSIC in `pci`, LAC in `tac`, CI in `cell_id`, CGI `MCC-MNC-LAC-CI` in `cgi`, RSSI in `rsrp`, band `GSM900`/`DCS1800` |
 | `gsm` | 2G: BSIC, level (dBFS), frequency error and every decoded SI message (JSON: hex plus the parsed fields) |
 | `lat`, `lon`, `accuracy_m`, `location_source`, `location_time` | position of the reading (see [Location](#location)) |
 | `mib`, `sib1` … `sib13` | decoded messages as JSON, as in `cells.sqlite` |

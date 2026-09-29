@@ -153,12 +153,12 @@ def tmp_dir(need):
     return "/tmp"
 
 
-def save(conn, scan_id, band_label, r, loc):
+def save(conn, scan_id, band_label, r, loc, gain):
     si = r.get("si", {})
     lai = si.get("si3") or si.get("si4") or {}
     freq = round(gsm_decode.arfcn_freq(r["arfcn"]) / 1e6, 1)
     rid = readings_db.create_reading(conn, scan_id, r["arfcn"], band_label, freq, loc, detection="gsm")
-    fields = {"rat": "GSM", "pci": r["bsic"],
+    fields = {"rat": "GSM", "pci": r["bsic"], "rsrp": readings_db.gsm_rssi(r["level_dbfs"], gain),
               "gsm": json.dumps({"bsic": r["bsic"], "level_dbfs": r["level_dbfs"], "df_hz": r["df_hz"], "si": si})}
     if lai:
         fields.update(mcc=lai["mcc"], mnc=lai["mnc"], plmns="%s-%s" % (lai["mcc"], lai["mnc"]), tac=lai["lac"])
@@ -238,7 +238,7 @@ def main():
             for r in sorted(res, key=lambda r: gsm_decode.arfcn_freq(r["arfcn"])):
                 if r.get("bsic") is None:
                     continue
-                save(conn, scan_id, BANDS[b][0], r, loc)
+                save(conn, scan_id, BANDS[b][0], r, loc, gains[b])
                 cells += 1
                 si = r.get("si", {})
                 lai = si.get("si3") or si.get("si4")

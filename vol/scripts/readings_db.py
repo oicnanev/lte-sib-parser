@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS readings (
     enb_id INTEGER,                 -- eci >> 8
     cell_id INTEGER,                -- eci & 0xff
     cgi TEXT,                       -- MCC-MNC-ECI of the first PLMN
-    rsrp REAL,                      -- dBm
+    rsrp REAL,                      -- dBm; GSM: RSSI of the BCCH carrier (see gsm_rssi)
     bandwidth_mhz REAL,             -- from the MIB, or estimated by the sweep
     detection TEXT,                 -- srsue or decoder (decoded), pss (sync signals only), gsm
     rat TEXT,                       -- NULL = LTE; GSM: earfcn = ARFCN, pci = BSIC, tac = LAC,
@@ -71,6 +71,38 @@ MIGRATIONS = [("readings", "bandwidth_mhz", "REAL"), ("readings", "detection", "
 MIB_BANDWIDTH = {"n6": 1.4, "n15": 3, "n25": 5, "n50": 10, "n75": 15, "n100": 20}
 
 
+# capture gains gsm_scan.py uses when none is given (bladeRF dB, HackRF "lna,vga")
+GSM_GAINS = {"bladerf": {"GSM900": "15", "DCS1800": "30"}, "hackrf": {"GSM900": "24,16", "DCS1800": "32,20"}}
+
+
+def gsm_rssi(level_dbfs, gain):
+    """GSM RSSI in dBm: the BCCH carrier's power (sent in every timeslot, what a
+    phone reports as RxLev), with srsue's conversion dBFS + 30 - (rx gain + 62).
+    Not calibrated: compare GSM readings of one SDR with each other. Not with
+    the LTE RSRP either, which srsRAN takes after an unnormalised FFT and comes
+    out tens of dB higher (e.g. -35 dBm next to GSM carriers at -82 dBm)."""
+    g = sum(float(x) for x in str(gain).split(","))  # HackRF: lna + vga
+    return round(level_dbfs + 30 - (g + 62), 1)
+
+
+def _backfill_gsm_rssi(conn):
+    """GSM readings saved before the RSSI was: computed from their level and the
+    scan's gain (given in its args, else gsm_scan.py's default for the SDR)"""
+    rows = conn.execute("SELECT r.id, r.band, r.gsm, s.args FROM readings r LEFT JOIN scans s ON s.id = r.scan_id "
+                        "WHERE r.rat = 'GSM' AND r.rsrp IS NULL AND r.gsm IS NOT NULL").fetchall()
+    for rid, band, gsm, args in rows:
+        try:
+            level = json.loads(gsm)["level_dbfs"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        words = (args or "").split()
+        sdr = words[words.index("--sdr") + 1] if "--sdr" in words[:-1] else "bladerf"
+        flag = "--gain-low" if band == "GSM900" else "--gain-high"
+        gain = words[words.index(flag) + 1] if flag in words[:-1] else GSM_GAINS.get(sdr, {}).get(band)
+        if gain:
+            conn.execute("UPDATE readings SET rsrp = ? WHERE id = ?", (gsm_rssi(level, gain), rid))
+
+
 def connect(path):
     conn = sqlite3.connect(path, timeout=10)
     conn.executescript(SCHEMA)
@@ -78,6 +110,7 @@ def connect(path):
         cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % table)]
         if col not in cols:
             conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
+    _backfill_gsm_rssi(conn)
     conn.commit()
     return conn
 
