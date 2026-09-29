@@ -126,7 +126,7 @@ const cgiHtml = (r) => (r.cgi != null ? esc(r.cgi) : `<span class="muted">${esc(
 const OPERATORS = {
   "268-01": { name: "Vodafone", bg: "#e60000", fg: "#fff" },
   "268-02": { name: "DIGI", bg: "#1d4f9c", fg: "#fff" },
-  "268-03": { name: "NOS", bg: "#111827", fg: "#fff" },
+  "268-03": { name: "NOS", bg: "#5360cb", fg: "#fff" }, // rgb(83, 96, 203), measured on the logo
   "268-06": { name: "MEO", bg: "#00a3e0", fg: "#fff" },
 };
 let logos = {}; // plmn -> URL, from /api/logos
