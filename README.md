@@ -1228,6 +1228,21 @@ Changes in this fork, newest last, with the reason for each.
     (before: 1:33, 16 cells, 15 with SIB1), plus 25-28 GSM cells. A weak cell
     (B8 3525, -78 dBm) can now be missed by the shorter search.
 
+54. **Co-channel sectors: blind CFI and one PCI per reading.** A B8 cell with
+    RSRP -57 dBm gave no SIB1: the PSS was strong (PSR 8-10) but the SNR stayed
+    at 2-5 dB and the PCFICH gave a different CFI almost every subframe. The
+    carrier holds two sectors of one eNB (PCIs 3n and 3n+2) and the spot was
+    between them: good RSRP, poor SINR. When no SI-RNTI DCI is found with the
+    decoded CFI, the decoder now tries the other two (the PDSCH's 24-bit CRC
+    guards the result). That test also showed that a new acquisition could
+    lock onto the other sector and add its SIBs to the first one's reading: a
+    reading now keeps one PCI once its SIB1 is in (before that, the decoder
+    moves on to the new cell), and the RSRP line is written after SIB1 (or at
+    the end), so it is the kept cell's. Search + MIB went back to 3 s (2 s
+    once missed a strong cell). That cell: SIB1 in 8 of 8 attempts (every SIB
+    in 6), none before; known preset + 2G: 1:09 and 1:07, the cell with CGI
+    both times.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

@@ -268,6 +268,8 @@ cannot be tested end-to-end without it.
        Bad attempts = bad timing lock from acquisition (SNR low from the start).
        2026-09-29: search 2 s, SI wait = 3 periods of slowest missing SI, no
        sib-scan retry with decoder → known preset + 2G 1:33 → 1:04 (README 53).
+       Blind CFI + PCI kept per reading once SIB1 is in, RSRP after SIB1, search
+       3 s → 1:07-1:09, co-channel-sector cell B8 3475 decoded (README 54).
        Original plan: srsue is a whole UE (~9 s
        start-up per cell, camps on one cell). Build a small C program on
        libsrsran's PHY (see srsRAN lib/examples/pdsch_ue.c, which decodes SIB1

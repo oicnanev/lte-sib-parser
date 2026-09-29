@@ -50,7 +50,7 @@ struct args_t {
   std::string dev_name    = "";
   std::string dev_args    = "";
   double      hw_srate    = 0;   // 0: change the device rate per phase
-  float       search_s    = 2;   // cell search + MIB (real cells show up within ~1 s)
+  float       search_s    = 3;   // cell search + MIB (cells show up within ~1 s; 2 s missed a strong one)
   float       sib1_s      = 1.5; // SIB1 after the MIB (sent every 20 ms; if the timing
                                  // lock is good it comes within ~0.2 s)
   float       carrier_s   = 12;  // total per carrier: new acquisitions while no SIB1
@@ -71,7 +71,7 @@ static void usage(const char* prog)
          "  -d NAME     RF device (bladeRF, soapy, UHD, ...; default: first found)\n"
          "  -a ARGS     RF device arguments\n"
          "  -r HZ       fixed hardware sample rate, decimated in software (e.g. 30.72e6)\n"
-         "  -t S        cell search + MIB time limit (default 2)\n"
+         "  -t S        cell search + MIB time limit (default 3)\n"
          "  -1 S        SIB1 wait after the MIB (default 1.5; up to 4 acquisitions per carrier)\n"
          "  -T S        longest wait for the next SI message (default 6; normally 3 periods of the slowest SI missing)\n"
          "  -l FILE     log file (default stdout, one-carrier mode)\n"
@@ -270,7 +270,9 @@ struct si_state_t {
   uint32_t         win_ms = 0; // SI window length (SIB1 si-WindowLength)
   std::vector<int> period;     // SI periodicity in frames, per SI message, in SIB1's order
   std::vector<std::set<int> > si_sibs; // SIB numbers each SI message carries
-  bool             rsrp_done = false;
+  bool             rsrp_done   = false; // measured on the current cell
+  bool             rsrp_logged = false; // written (after SIB1, or at the end)
+  float            rsrp_dbm    = 0;
   bool          done() const
   {
     return have_sib1 && std::includes(received.begin(), received.end(), expected.begin(), expected.end());
@@ -282,6 +284,17 @@ static int sib_number(const std::string& s)
   // "sib2", "sib13-v920", "sibType3" -> 2, 13, 3
   size_t i = s.find_first_of("0123456789");
   return i == std::string::npos ? -1 : atoi(s.c_str() + i);
+}
+
+// the RSRP line, once per carrier (parse_save_sib keeps the first one)
+static void log_rsrp(FILE* f, si_state_t& st)
+{
+  if (st.rsrp_done && !st.rsrp_logged) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "\t[powermeasure]\t[{\"rsrp\":%.1f}]", st.rsrp_dbm);
+    log_line(f, "PHY", buf);
+    st.rsrp_logged = true;
+  }
 }
 
 // how long to wait for the SI messages still missing: 3 periods of the slowest
@@ -394,7 +407,25 @@ static int decode_si(srsran_ue_dl_t*     q,
   }
   srsran_dci_dl_t dci[SRSRAN_MAX_DCI_MSG] = {};
   if (srsran_ue_dl_find_dl_dci(q, sf, cfg, SRSRAN_SIRNTI, dci) != 1) {
-    return 0;
+    // Blind CFI: under co-channel interference (e.g. two sectors of one eNB on
+    // the carrier) the PCFICH often decodes a wrong CFI, and the PDCCH is then
+    // read from the wrong symbols. Try the other values (the PDSCH's 24-bit CRC
+    // still guards the result).
+    uint32_t decoded = sf->cfi;
+    uint32_t lo = q->cell.nof_prb <= 10 ? 2 : 1, hi = lo + 2;
+    bool     found = false;
+    for (uint32_t c = lo; c <= hi && !found; c++) {
+      if (c == decoded) {
+        continue;
+      }
+      sf->cfi = c;
+      found   = srsran_pdcch_extract_llr(&q->pdcch, sf, &q->chest_res, q->sf_symbols) == SRSRAN_SUCCESS &&
+              srsran_ue_dl_find_dl_dci(q, sf, cfg, SRSRAN_SIRNTI, dci) == 1;
+    }
+    if (!found) {
+      sf->cfi = decoded;
+      return 0;
+    }
   }
   if (srsran_ue_dl_dci_to_pdsch_grant(q, sf, cfg, &dci[0], &pdsch->grant) || !pdsch->grant.tb[0].enabled) {
     return 0;
@@ -466,6 +497,7 @@ static const char* process_carrier(rx_t&         rx,
                                    double        offset,
                                    FILE*         f,
                                    si_state_t&   st, // kept across acquisitions of one carrier
+                                   int&          pci_lock, // PCI of the first acquisition (-1: none yet)
                                    double        capture_center = 0)
 {
   double dl = srsran_band_fd(earfcn) * 1e6;
@@ -545,6 +577,17 @@ static const char* process_carrier(rx_t&         rx,
   /* 2. MIB */
   {
     srsran_pbch_mib_unpack(bch, &cell, nullptr);
+    // another cell of the carrier (e.g. the next sector of the eNB): once SIB1
+    // of the first one is in, a new acquisition must not add its SIBs to that
+    // reading; before that, go on with the new cell (and measure its RSRP)
+    if (pci_lock >= 0 && (int)cell.id != pci_lock) {
+      if (st.have_sib1) {
+        printf("EARFCN %d: acquired PCI %d instead of %d, not used\n", earfcn, cell.id, pci_lock);
+        return "other";
+      }
+      st.rsrp_done = false;
+    }
+    pci_lock = (int)cell.id;
     char line[160];
     snprintf(line, sizeof(line), "Found Cell:  Mode=%s, PCI=%d, PRB=%d, Ports=%d, CP=%s, CFO=%.1f KHz",
              cell.frame_type == SRSRAN_FDD ? "FDD" : "TDD", cell.id, cell.nof_prb, cell.nof_ports,
@@ -619,7 +662,7 @@ static const char* process_carrier(rx_t&         rx,
   double     last_sync = rx_clock(rx);
   double     last_sfn  = rx_clock(rx);
   uint32_t   n_reset   = 0;
-  while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && st.rsrp_done)) {
+  while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && st.rsrp_logged)) {
     cf_t* bufs[SRSRAN_MAX_CHANNELS] = {sf_buf[0]};
     int   n                         = srsran_ue_sync_zerocopy(&ue_sync, bufs, max_samples);
     if (n < 0) {
@@ -699,12 +742,12 @@ static const char* process_carrier(rx_t&         rx,
       if (!st.rsrp_done && isnormal(ue_dl.chest_res.rsrp_dbm)) {
         rsrp_sum += ue_dl.chest_res.rsrp_dbm;
         if (++rsrp_n == 20) {
-          char buf[64];
-          snprintf(buf, sizeof(buf), "\t[powermeasure]\t[{\"rsrp\":%.1f}]",
-                   rsrp_sum / rsrp_n - (gain + args.gain_offset));
-          log_line(f, "PHY", buf);
+          st.rsrp_dbm  = rsrp_sum / rsrp_n - (gain + args.gain_offset);
           st.rsrp_done = true;
         }
+      }
+      if (st.have_sib1) {
+        log_rsrp(f, st); // the cell is settled: its RSRP can go out
       }
       n_dci += nb > 0;
       n_crc += crc;
@@ -759,16 +802,18 @@ static const char* run_carrier(rx_t&         rx,
   // the first subframe, e.g. another cell with the same PSS): acquire again
   // (also when the SI messages stall after SIB1); what was decoded is kept
   si_state_t  st;
+  int         pci    = -1;
   double      t0     = rx_clock(rx);
-  const char* status = process_carrier(rx, args, earfcn, gain, offset, f, st, capture_center);
+  const char* status = process_carrier(rx, args, earfcn, gain, offset, f, st, pci, capture_center);
   for (int k = 1; k < 4 && (strcmp(status, "mib") == 0 || strcmp(status, "sib1") == 0) && !go_exit &&
                   !rx.from_buf && rx_clock(rx) - t0 < args.carrier_s;
        k++) {
-    const char* again = process_carrier(rx, args, earfcn, gain, offset, f, st, capture_center);
-    if (strcmp(again, "nocell") != 0 && strcmp(again, "error") != 0) {
+    const char* again = process_carrier(rx, args, earfcn, gain, offset, f, st, pci, capture_center);
+    if (strcmp(again, "nocell") != 0 && strcmp(again, "error") != 0 && strcmp(again, "other") != 0) {
       status = again;
     }
   }
+  log_rsrp(f, st); // no SIB1: the RSRP of the last cell acquired
   log_line(f, "DEC", std::string("[decoder] done ") + status);
   if (f != stdout) {
     fclose(f);
