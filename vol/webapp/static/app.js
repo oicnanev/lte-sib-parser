@@ -47,12 +47,16 @@ function tick() {
   const st = status;
   if (st.running && st.started) {
     const total = (Date.now() - Date.parse(st.started)) / 1000;
-    const band = st.band_started && st.step ? ` (B${st.band} ${hms((Date.now() - Date.parse(st.band_started)) / 1000)})` : "";
+    const band = st.band_started && st.step
+      ? ` (${stepLabel(st.band)} ${hms((Date.now() - Date.parse(st.band_started)) / 1000)})` : "";
     el.textContent = `⏱ ${hms(total)}${band}`;
   } else if (st.started && st.finished) {
-    const n = (st.bands || []).length;
+    // st.bands: the steps that have a band (LTE bands, "2G"), not an LTE list
+    const steps = st.bands || [];
+    const lte = steps.filter((b) => /^\d+$/.test(String(b))).length;
+    const parts = [lte > 1 ? `${lte} bands` : "", steps.includes("2G") ? "with 2G" : ""].filter(Boolean);
     el.textContent = `last run ${hms((Date.parse(st.finished) - Date.parse(st.started)) / 1000)}` +
-      (n > 1 ? ` (${n} bands)` : "");
+      (parts.length ? ` (${parts.join(", ")})` : "");
   } else {
     el.textContent = "";
   }
@@ -96,6 +100,11 @@ function rsrpColor(rsrp) {
   if (rsrp >= -100) return "#eab308";
   if (rsrp >= -110) return "#f97316";
   return "#dc2626";
+}
+
+// a run's step: an LTE band (B20), the 2G step, or an LTE list/preset (no band)
+function stepLabel(b) {
+  return b == null || b === "" ? "LTE" : /^\d+$/.test(String(b)) ? `B${b}` : String(b);
 }
 
 // LTE bands are numbers (B20), GSM ones names (GSM900)

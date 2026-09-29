@@ -318,7 +318,8 @@ Open <http://localhost:8080>. It shows:
   EARFCNs (closed by default; opening it jumps to the latest lines). The
   current task and EARFCN are always shown in the header.
 - **Stopwatch** in the header: elapsed time of the run and of the current band
-  while scanning, then `last run 13:46 (6 bands)`. The scan filter shows each
+  while scanning (the step: `B20`, `LTE` for an EARFCN list or preset, `2G`),
+  then `last run 13:46 (6 bands)` or `(6 bands, with 2G)`. The scan filter shows each
   band's duration.
 - **Theme** button in the header: Auto (follows the system), Light or Dark;
   the choice is kept in the browser. In dark mode the map tiles are darkened.
