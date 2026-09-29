@@ -66,6 +66,10 @@ RUN g++ -O2 -std=c++14 -I/usr/local/include -I/srsRAN_4G/build/lib/include \
       -Wl,--start-group -lrrc_asn1 -lasn1_utils -lsrsran_phy -lsrsran_common -lsrslog -Wl,--end-group \
       -lsrsran_rf -lfftw3f -lmbedcrypto -lpthread -lm
 
+# gsm_decoder: GSM BCCH decoder for wide captures (C++ port of vol/scripts/gsm_decode.py)
+COPY sib_decoder/gsm_decoder.cc /srsRAN_4G/sib_decoder/
+RUN g++ -O3 -std=c++14 /srsRAN_4G/sib_decoder/gsm_decoder.cc -o /usr/bin/gsm_decoder -lfftw3f -lpthread -lm
+
 RUN mkdir /vol/
 
 WORKDIR /vol

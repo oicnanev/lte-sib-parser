@@ -317,7 +317,7 @@ async function loadScans() {
   const cur = sel.value;
   sel.innerHTML = '<option value="">all</option>' + scans.map((s) =>
     `<option value="${s.id}">#${s.id} ${esc(new Date(s.started).toLocaleString())}` +
-    `${s.band ? " B" + esc(s.band) : ""} · ${s.readings} reading(s)` +
+    `${s.band ? " B" + esc(s.band) : ""}${(s.args || "").startsWith("gsm_scan") ? " 2G" : ""} · ${s.readings} reading(s)` +
     `${s.finished ? " · " + hms((Date.parse(s.finished) - Date.parse(s.started)) / 1000) : " · running"}` +
     `</option>`).join("");
   sel.value = cur;

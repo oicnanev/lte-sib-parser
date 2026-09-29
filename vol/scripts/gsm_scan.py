@@ -8,9 +8,9 @@ CGI MCC-MNC-LAC-CI, system information as JSON in gsm).
               [-L location.json] [--ppm P] [--gain-low G] [--gain-high G]
 
 bladeRF: 56 MSPS, 50 MHz analog bandwidth: GSM-900 in one capture, DCS-1800 in
-two. HackRF: 20 MSPS, 3 + 5 captures. Each capture is 1.2 s (every SI3 slot
-of the 51-multiframe cycle comes at least once); the next capture is recorded
-while the previous one is decoded.
+two, all recorded in one bladeRF-cli session. HackRF: 20 MSPS, 3 + 5 captures.
+Each capture is 1.2 s (every SI3 slot of the 51-multiframe cycle comes at
+least once), decoded by gsm_decoder (C++) while the next ones are recorded.
 """
 import argparse
 import json
@@ -56,34 +56,83 @@ def plan(band, sdr):
     return out
 
 
-def start_capture(sdr, freq, path, secs, gain, ppm):
-    """start recording (returns the process): tuned ppm higher so that the
-    samples are centred on the nominal freq"""
-    c = SDRS[sdr]
-    tuned = int(round(freq * (1 + ppm / 1e6)))
-    n = int(c["rate"] * (secs + 0.05))
-    if sdr == "bladerf":
-        # AGC is on by default on the bladeRF 2.0 and blocks manual gain
-        cmd = ["bladeRF-cli", "-e",
-               "set frequency rx %d; set samplerate rx %d; set bandwidth rx %d; set agc rx off; "
-               "set gain rx %s; rx config file=%s format=bin n=%d; rx start; rx wait"
-               % (tuned, c["rate"], c["bw"], gain, path, n)]
-    else:
-        lna, vga = gain.split(",")
-        cmd = ["hackrf_transfer", "-r", path, "-f", str(tuned), "-s", str(int(c["rate"])),
-               "-n", str(n), "-l", lna, "-g", vga]
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+class Recorder:
+    """records the captures in order; wait(i) returns once capture i is
+    complete. bladeRF: one bladeRF-cli session for all of them (opening the
+    board costs ~2 s each time: 3 captures in 6.1 s instead of ~10 s), a file
+    is complete when it has its full size. HackRF: one hackrf_transfer per
+    capture, the next one started as soon as the previous one ends. Captures
+    are tuned ppm higher so that the samples are centred on the nominal
+    frequency."""
 
+    def __init__(self, sdr, jobs, files, secs, gains, ppm):
+        self.sdr, self.jobs, self.files, self.gains, self.ppm = sdr, jobs, files, gains, ppm
+        self.c = SDRS[sdr]
+        self.secs = secs
+        self.n = int(self.c["rate"] * (secs + 0.05))
+        self.bytes = self.n * 2 * np.dtype(self.c["dtype"]).itemsize
+        self.proc = None
 
-def finished(proc, secs):
-    """capture ended well within a generous time (device setup is ~2 s)"""
-    try:
-        code = proc.wait(timeout=secs + 15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    def _tuned(self, i):
+        return int(round(self.jobs[i][1] * (1 + self.ppm / 1e6)))
+
+    def _start(self, i):
+        """record captures i.. (bladeRF) or capture i (HackRF)"""
+        self.stop()
+        for f in self.files[i:]:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        c = self.c
+        if self.sdr == "bladerf":
+            # AGC is on by default on the bladeRF 2.0 and blocks manual gain
+            cmds = ["set samplerate rx %d" % c["rate"], "set bandwidth rx %d" % c["bw"], "set agc rx off"]
+            for j in range(i, len(self.jobs)):
+                cmds += ["set frequency rx %d" % self._tuned(j), "set gain rx %s" % self.gains[self.jobs[j][0]],
+                         "rx config file=%s format=bin n=%d" % (self.files[j], self.n), "rx start", "rx wait"]
+            cmd = ["bladeRF-cli", "-e", "; ".join(cmds)]
+        else:
+            lna, vga = self.gains[self.jobs[i][0]].split(",")
+            cmd = ["hackrf_transfer", "-r", self.files[i], "-f", str(self._tuned(i)), "-s", str(int(c["rate"])),
+                   "-n", str(self.n), "-l", lna, "-g", vga]
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def start(self):
+        self._start(0)
+
+    def _complete(self, i):
+        if self.sdr == "hackrf":
+            return self.proc.poll() == 0
+        try:
+            return os.path.getsize(self.files[i]) == self.bytes
+        except OSError:
+            return False
+
+    def wait(self, i):
+        for attempt in range(2):
+            # generous: opening the board ~2 s, each capture before this one ~1.5 s
+            deadline = time.time() + 15 + 2 * (self.secs + 0.5) * (i + 1)
+            while not self._complete(i):
+                code = self.proc.poll()
+                if (code is not None and not self._complete(i)) or time.time() > deadline:
+                    break
+                time.sleep(0.02)
+            if self._complete(i):
+                if self.sdr == "hackrf" and i + 1 < len(self.jobs):
+                    self._start(i + 1)
+                return True
+            # seen once with bladeRF-cli: a capture stopped after a few ms and
+            # never returned; record from this one again
+            print("[gsm] capture at %.1f MHz hung or failed, recording it again" % (self.jobs[i][1] / 1e6),
+                  flush=True)
+            self._start(i)
         return False
-    return code == 0
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait()
 
 
 def clipping(path, sdr):
@@ -146,10 +195,16 @@ def main():
 
     jobs = [(b, fc, arfcns) for b in a.bands for fc, arfcns in plan(b, a.sdr)]
     size = int(c["rate"] * (a.secs + 0.05)) * 2 * np.dtype(c["dtype"]).itemsize
-    d = tmp_dir(3 * size)
+    d = tmp_dir((len(jobs) + 1) * size)   # a bladeRF records every capture while the first is decoded
     files = [os.path.join(d, "gsm.%d.%d.iq" % (os.getpid(), i)) for i in range(len(jobs))]
 
+    main_pid = os.getpid()
+
     def cleanup(*_):
+        # the decoder's worker processes inherit this handler and get SIGTERM
+        # when their pool closes: only the main process may delete the captures
+        if os.getpid() != main_pid:
+            os._exit(0)
         for f in files:
             try:
                 os.unlink(f)
@@ -161,30 +216,19 @@ def main():
 
     t0 = time.time()
     cells = 0
+    rec = Recorder(a.sdr, jobs, files, a.secs, gains, a.ppm)
     try:
         print("task: gsm_capture", flush=True)
-        b, fc, _ = jobs[0]
-        print("[gsm] capturing %.1f MHz (%s)" % (fc / 1e6, BANDS[b][0]), flush=True)
-        proc = start_capture(a.sdr, fc, files[0], a.secs, gains[b], a.ppm)
+        print("[gsm] capturing %s MHz" % ", ".join("%.1f" % (fc / 1e6) for _, fc, _ in jobs), flush=True)
+        rec.start()
         for i, (b, fc, arfcns) in enumerate(jobs):
-            if not finished(proc, a.secs):
-                # seen once with bladeRF-cli: a capture started during a decode
-                # stopped after a few ms and never returned; record it again
-                print("[gsm] capture at %.1f MHz hung, recording it again" % (fc / 1e6), flush=True)
-                proc = start_capture(a.sdr, fc, files[i], a.secs, gains[b], a.ppm)
-                if not finished(proc, a.secs):
-                    print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6),
-                          flush=True)
-                    return 1
+            if not rec.wait(i):
+                print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6), flush=True)
+                return 1
             clip = clipping(files[i], a.sdr)
             if clip > 0.002:
                 print("[gsm] %.1f%% of the samples clipped at %.1f MHz: lower the gain" % (100 * clip, fc / 1e6),
                       flush=True)
-            # record the next capture while this one is decoded
-            if i + 1 < len(jobs):
-                nb, nfc, _ = jobs[i + 1]
-                print("[gsm] capturing %.1f MHz (%s)" % (nfc / 1e6, BANDS[nb][0]), flush=True)
-                proc = start_capture(a.sdr, nfc, files[i + 1], a.secs, gains[nb], a.ppm)
             print("task: gsm_decode", flush=True)
             res = gsm_decode.decode_capture(
                 files[i], c["rate"], fc, arfcns, bw=c["bw"], jobs=a.jobs, secs=a.secs,
@@ -203,9 +247,8 @@ def main():
                     ", %s-%s LAC %d" % (lai["mcc"], lai["mnc"], lai["lac"]) if lai else "",
                     " CI %d" % si["si3"]["ci"] if "si3" in si else "",
                     ("SI " + " ".join(sorted(k[2:] for k in si))) if si else "no SI decoded"), flush=True)
-            if i + 1 < len(jobs):
-                print("task: gsm_capture", flush=True)
     finally:
+        rec.stop()
         cleanup()
         readings_db.end_scan(conn, scan_id)
     print("[gsm] %d cells in %.0f s" % (cells, time.time() - t0), flush=True)

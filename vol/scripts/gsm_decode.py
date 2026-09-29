@@ -12,6 +12,7 @@ Used by gsm_scan.py; also runs on a capture file:
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -108,8 +109,13 @@ def channelize(path, fs, fc, arfcns, bw=None, skip_s=0.01, jobs=8, tmp=None, sec
         chans.append((c0, (c0 + np.fft.fftfreq(M, 1 / M).astype(int)) % B))
     if not names:
         return {}
-    # ~0.5 GB per 100 channels and second: a file (page cache), not the heap
-    fd, outp = tempfile.mkstemp(dir=tmp or ("/dev/shm" if os.path.isdir("/dev/shm") else None), suffix=".cz")
+    # ~0.5 GB per 100 channels and second: a file (page cache), not the heap;
+    # /dev/shm only when it has room (Docker's default is 64 MB: writing past
+    # it kills the worker processes and the pool hangs)
+    need = len(names) * nblk * MS * 8
+    if tmp is None and os.path.isdir("/dev/shm") and shutil.disk_usage("/dev/shm").free > need * 1.2:
+        tmp = "/dev/shm"
+    fd, outp = tempfile.mkstemp(dir=tmp, suffix=".cz")
     os.close(fd)
     shape = (len(names), nblk * MS)
     np.memmap(outp, dtype=np.complex64, mode="w+", shape=shape).flush()
@@ -498,10 +504,45 @@ def _decode_one(ar):
     return ar, decode_channel(CHANS[ar])
 
 
+def decode_capture_cpp(path, fs, fc, arfcns, bw=None, jobs=8, secs=None, presearch=0.4,
+                       dtype=np.int16, log=None):
+    """the same with gsm_decoder (C++, in the image): ~5x faster. Its SI
+    messages come as hex and are parsed here."""
+    import subprocess
+    cmd = ["gsm_decoder", "-i", path, "-f", repr(fc), "-r", repr(fs), "-w", repr(bw or 0.8 * fs),
+           "-a", " ".join(map(str, arfcns)), "-j", str(jobs), "--presearch", repr(presearch or 0),
+           "--fcch-max-hz", repr(FCCH_MAX_HZ)]
+    if secs:
+        cmd += ["--secs", repr(secs)]
+    if np.dtype(dtype) == np.int8:
+        cmd.append("--int8")
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if log:
+        for line in p.stderr.splitlines():
+            log(line)
+    if p.returncode:
+        raise RuntimeError("gsm_decoder failed (%d)" % p.returncode)
+    out = []
+    for line in p.stdout.splitlines():
+        r = json.loads(line)
+        si = {}
+        for m in r.pop("msgs"):
+            name, info = parse_si(bytes.fromhex(m["hex"]))
+            if name and name not in si:
+                info["tc"] = m["tc"]
+                si[name] = info
+        r["si"] = si
+        out.append(r)
+    return out
+
+
 def decode_capture(path, fs, fc, arfcns, bw=None, jobs=8, secs=None, presearch=0.4,
                    dtype=np.int16, full_scale=2048, log=None):
     """decode every BCCH among `arfcns` in a capture file -> list of result
-    dicts (with "arfcn"), in the order they finish"""
+    dicts (with "arfcn"), in the order they finish. Uses gsm_decoder (C++)
+    when it is installed, unless LTE_GSM_NUMPY is set."""
+    if shutil.which("gsm_decoder") and not os.environ.get("LTE_GSM_NUMPY"):
+        return decode_capture_cpp(path, fs, fc, arfcns, bw, jobs, secs, presearch, dtype, log)
     import multiprocessing as mp
     global CHANS
     t = time.time()

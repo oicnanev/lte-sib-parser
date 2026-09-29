@@ -468,7 +468,8 @@ the [readings database](#readings-database). Nothing is transmitted.
 
 - **Web app**: mode *2G only (GSM 900/1800)*, or tick **Also 2G** to run it
   after any LTE scan (e.g. the known-EARFCN preset). Needs the SDR set to
-  bladeRF or HackRF.
+  bladeRF or HackRF. The 2G part is a scan of its own: in the table's scan
+  filter it is marked *2G* (choose *all* to see LTE and GSM together).
 - **Command line** (inside the container):
   ```bash
   python3 scripts/gsm_scan.py                          # bladeRF, both bands
@@ -476,20 +477,24 @@ the [readings database](#readings-database). Nothing is transmitted.
   python3 scripts/gsm_scan.py --bands 900 --gain-low 20
   ```
 - **bladeRF**: 56 MSPS with a 50 MHz filter, so GSM-900 is one capture and
-  DCS-1800 two, 1.2 s each; each capture is recorded while the previous one
-  is decoded. Default gains 15 (900) and 30 (1800), for a Cisco LTE antenna
+  DCS-1800 two, 1.2 s each, all three in one `bladeRF-cli` session (6.1 s);
+  each is decoded as soon as it is complete. Default gains 15 (900) and 30 (1800), for a Cisco LTE antenna
   (40 clipped at 1.8 GHz next to strong LTE carriers); a warning is printed
   when more than 0.2 % of the samples clip.
 - **HackRF**: 20 MSPS, 3 + 5 captures; gains `24,16` / `32,20` (lna,vga,
   `LTE_HACKRF_LOW_GAIN` is honoured below 1 GHz). Give its clock error with
   `--ppm` (the web app passes the one measured by the LTE steps); without it
   the FCCH search covers ±45 kHz. **Not yet tested with a HackRF.**
-- **Time**: ~29 s for both bands with a bladeRF on a 4-core i7-8550U (captures
-  ~12 s, decoding overlapped); 29–33 cells, most with the full CGI, at a site
-  with three operators on GSM-900 and one on DCS-1800.
-- Captures and channel buffers go to `/dev/shm` (docker-compose gives the
-  containers 2 GB; `/tmp` otherwise): two captures of 280 MB plus up to
-  ~300 MB of channel buffers at a time.
+- **Time**: ~10 s for both bands with a bladeRF on a 4-core i7-8550U; 25–30
+  cells, 23–24 with the full CGI (`MCC-MNC-LAC-CI`), at a site with three
+  operators on GSM-900 and one on DCS-1800.
+- **Decoder**: `gsm_decoder` (C++, FFTW, in the image) does the signal
+  processing; `vol/scripts/gsm_decode.py` parses its SI messages, and is also
+  a complete numpy version of the same decoder (used when `gsm_decoder` is
+  missing or `LTE_GSM_NUMPY=1`; ~3x slower overall).
+- Captures go to `/dev/shm` (docker-compose gives the containers 2 GB; `/tmp`
+  otherwise): up to three captures of 280 MB at a time; the decoder needs
+  another ~300 MB of RAM.
 - `vol/scripts/gsm_decode.py` also decodes a capture file:
   `gsm_decode.py file.iq -f 942.5e6 -r 56e6 -w 50e6 -b 900` (`--int8` for a
   HackRF file), one JSON line per cell.
@@ -683,7 +688,8 @@ Rescan the EARFCNs of an earlier scan:
 | `vol/scripts/location.py` | current position: gpsd, else the web app's location file |
 | `vol/webapp/server.py` | the web app (`--port`, `--db` readings database, `--learned` learned-EARFCN file) |
 | `vol/scripts/gsm_scan.py [--sdr hackrf] [--bands 900 1800]` | 2G scan: GSM-900/DCS-1800 cells into the readings database (see [2G (GSM)](#2g-gsm)) |
-| `vol/scripts/gsm_decode.py <file.iq> -f <Hz> -r <rate>` | decode every GSM BCCH in a capture file (library used by `gsm_scan.py`) |
+| `vol/scripts/gsm_decode.py <file.iq> -f <Hz> -r <rate>` | decode every GSM BCCH in a capture file (library used by `gsm_scan.py`; numpy version of `gsm_decoder`) |
+| `gsm_decoder -i <file.iq> -f <Hz> -r <rate> -a "<arfcns>"` | (in the image) the GSM decoder in C++: one JSON line per cell, SI messages as hex |
 | `vol/scripts/wide_chunks.py -b <band>` | split a band into the wide captures used by `sib-scan.sh -S` with a bladeRF (centre and EARFCN range per capture) |
 | `vol/scripts/check_earfcns.py -e "<earfcns>"` | check EARFCNs for cells with PSS/SSS, measure the clock (`-p auto`) |
 | `vol/webapp/demo/make_demo_db.py <db>` | readings database with fictitious data (test PLMN 001-01), for demos and screenshots |
@@ -1179,6 +1185,27 @@ Changes in this fork, newest last, with the reason for each.
     app so that a HackRF's measured clock error can be passed on. Measured:
     Portugal known-EARFCN preset + 2G with the bladeRF, 2:22 in total (LTE 16
     cells in 1:53, GSM 33 cells, 23 with CGI, in 29 s).
+
+52. **2G in ~10 s: the decoder in C++ and one capture session.** Timing the
+    29 s scan: ~3.4 s for the first capture, then decoding (11 s GSM-900,
+    ~7 and ~5 s DCS-1800, 2.8 s of each being the FCCH look-ahead), with the
+    later captures hidden behind it. `worker/sib_decoder/gsm_decoder.cc` is
+    the same chain as `gsm_decode.py` in C++ (FFTW single precision, threads
+    over blocks and over channels); on the same GSM-900 capture it found 21
+    cells against 22 (one weak cell on the edge), same BSICs and SI3s, in
+    3.9 s instead of 10.6 s, then 2.3 s after removing a sin/cos per sample
+    (phase by recurrence), two modulos per gathered bin (and the bins outside
+    the filter) and the single-threaded zeroing of ~300 MB of channel
+    buffers. It prints the SI messages as hex; Python parses them, so there
+    is one parser. With decoding that fast, opening the bladeRF (~2 s per
+    `bladeRF-cli`) dominated: the three captures now run in one session and
+    a file counts as complete when it has its full size (6.1 s for all three
+    instead of ~10 s). Result: ~10 s for both bands (4 runs: 25–30 cells,
+    23–24 with CGI). Also fixed on the way: the multiprocessing pool stops
+    its workers with SIGTERM and they inherited `gsm_scan.py`'s cleanup
+    handler, which deleted the captures (a run ended with "No such file");
+    and the numpy version put its buffers in `/dev/shm` without checking the
+    space (Docker's default is 64 MB), which hung the pool.
 
 ### Known limitations
 

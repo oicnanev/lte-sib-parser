@@ -294,7 +294,12 @@ cannot be tested end-to-end without it.
        (GSM-900 3 operators, DCS-1800 1). Readings: rat='GSM', ARFCN in earfcn,
        BSIC in pci, LAC in tac, CI in cell_id, JSON in `gsm`. Web app: mode
        "2G only" and "Also 2G" (runs after LTE). HackRF path written, untested.
-       Gains bladeRF 15 (900) / 30 (1800; 40 clipped). Next ideas: SI2 range
-       formats, port the chain to C++ in lte_sib_decoder for speed.
+       Gains bladeRF 15 (900) / 30 (1800; 40 clipped).
+       Then (same day) `worker/sib_decoder/gsm_decoder.cc` (C++ port, FFTW,
+       threads; Python parses its hex SIs) + one bladeRF-cli session for all 3
+       captures (file complete = full size): 2G in ~10 s, 25-30 cells, 23-24
+       with CGI. numpy path kept (LTE_GSM_NUMPY=1). Remaining cost: FCCH
+       look-ahead ~1 s per capture, opening the bladeRF ~2 s. Next ideas: SI2
+       range formats (DCS neighbour lists).
     Out of scope by the user's choice: Wi-Fi, Bluetooth, 3G.
 23. Further goals: to be defined with the user.
