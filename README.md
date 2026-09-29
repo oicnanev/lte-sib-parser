@@ -339,7 +339,8 @@ Open <http://localhost:8080>. It shows:
   The **SDR** selector (HackRF One, bladeRF 2.0, Other) fills in device, device
   args, gains, `-t`/`-T` and the HackRF capture gain with the values measured
   for that SDR with a Cisco LTE antenna (see [Gain and antennas](#gain-and-antennas));
-  every field stays editable and the choice is remembered.
+  every field stays editable and the choice is remembered. The mode and band
+  are remembered too; a new browser starts on "Portugal (known EARFCNs, fast)".
   The band can also be a preset or a custom list, see [Several bands](#several-bands).
 - **Activity**: the scan's live output, in a panel that opens like Known
   EARFCNs (closed by default; opening it jumps to the latest lines). The

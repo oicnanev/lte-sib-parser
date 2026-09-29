@@ -494,8 +494,10 @@ function updateFormMode() {
   for (const el of document.querySelectorAll(".for-lte")) el.style.display = mode === "gsm" ? "none" : "";
   document.querySelector(".for-list").style.display = mode === "list" ? "" : "none";
 }
-form.mode.onchange = updateFormMode;
-form.band.onchange = updateFormMode;
+// mode and band are remembered per browser (default: the known-EARFCN preset)
+function saveChoice(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+form.mode.onchange = () => { saveChoice("mode", form.mode.value); updateFormMode(); };
+form.band.onchange = () => { saveChoice("band", form.band.value); updateFormMode(); };
 
 form.onsubmit = async (e) => {
   e.preventDefault();
@@ -606,11 +608,17 @@ function connect() {
   form.band.innerHTML =
     presets.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("") +
     bands.map((b) =>
-      `<option value="${b.band}"${b.band === 20 ? " selected" : ""}>B${b.band} ${esc(b.name)} ` +
+      `<option value="${b.band}">B${b.band} ${esc(b.name)} ` +
       `(${b.start_mhz}–${b.end_mhz} MHz, ${esc(b.mode)})</option>`).join("") +
     '<option value="custom">Custom list…</option>';
-  updateFormMode();
   applySdr(false); // again now that the band list (and its presets) exists
+  // the last mode and band chosen in this browser, else Portugal (known EARFCNs)
+  const has = (sel, v) => v != null && [...sel.options].some((o) => o.value === v);
+  let savedMode = null, savedBand = null;
+  try { savedMode = localStorage.getItem("mode"); savedBand = localStorage.getItem("band"); } catch (e) {}
+  if (has(form.mode, savedMode)) form.mode.value = savedMode;
+  form.band.value = has(form.band, savedBand) ? savedBand : has(form.band, "pt_known") ? "pt_known" : form.band.value;
+  updateFormMode();
   logos = await api("/api/logos").catch(() => ({}));
   for (const r of await api("/api/readings")) readings.set(r.id, r);
   await loadScans();
