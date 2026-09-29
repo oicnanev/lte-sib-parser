@@ -68,8 +68,9 @@ class Hub:
         self.status = {"running": False, "scan_id": None, "task": None, "earfcn": None,
                        "ppm": None, "band": None, "bands": [], "step": None,
                        "started": None, "band_started": None, "finished": None,
-                       "exit_code": None}
+                       "exit_code": None, "repeat": False, "run": None, "run_started": None}
         self.stop_requested = False
+        self.repeat = False  # start the job again when it ends (until Stop)
         self.gps = None  # last gpsd fix
         self.client_loc = None  # browser or manual
         self.location = None  # effective
@@ -340,7 +341,30 @@ def run_proc(proc):
 
 
 def job_thread(steps, ppm, env=None):
-    """run the steps (one sib-scan.sh call per band) one after another"""
+    """run the job; with "repeat" (e.g. while driving) start it again as soon as
+    it ends, until Stop or until the box is unticked (the run in progress ends)"""
+    run = 1
+    while True:
+        t0 = time.time()
+        code, ppm = run_steps(steps, ppm, env)
+        if hub.stop_requested or not hub.repeat:
+            break
+        if code not in (0, None) and time.time() - t0 < 15:
+            # e.g. the SDR unplugged: do not spin on a run that fails at once
+            hub.add_log("[webapp] run failed in %.0f s (exit code %s): not repeating" % (time.time() - t0, code))
+            break
+        run += 1
+        hub.add_log("[webapp] repeat: run %d" % run)
+        hub.set_status(run=run, run_started=readings_db.now())
+    if hub.stop_requested:
+        hub.add_log("[webapp] stopped")
+    hub.set_status(running=False, task=None, earfcn=None, step=None, band_started=None,
+                   finished=readings_db.now(), exit_code=code)
+
+
+def run_steps(steps, ppm, env=None):
+    """run the steps (one sib-scan.sh call per band) one after another;
+    returns (last exit code, ppm to reuse)"""
     code = None
     done_mhz = []  # carriers read so far: overlapping bands (e.g. B28/B20) must not read them again
     for i, (band, args) in enumerate(steps):
@@ -383,14 +407,11 @@ def job_thread(steps, ppm, env=None):
             ppm = "%.2f" % hub.status["ppm"]
             if i + 1 < len(steps):
                 hub.add_log("[webapp] reusing %s ppm for the next bands" % ppm)
-    if hub.stop_requested:
-        hub.add_log("[webapp] stopped")
     try:
         update_learned()
     except (OSError, sqlite3.Error) as e:
         hub.add_log("[webapp] cannot update learned EARFCNs: %s" % e)
-    hub.set_status(running=False, task=None, earfcn=None, step=None, band_started=None,
-                   finished=readings_db.now(), exit_code=code)
+    return code, ppm
 
 
 class BadRequest(Exception):
@@ -675,9 +696,11 @@ def start_scan(params):
     with hub.lock:
         hub.log.clear()
     hub.stop_requested = False
+    hub.repeat = bool(params.get("repeat"))
+    now = readings_db.now()
     hub.set_status(running=True, scan_id=None, task="starting", earfcn=None, ppm=None,
-                   band=None, step=None, started=readings_db.now(), band_started=None,
-                   finished=None, exit_code=None,
+                   band=None, step=None, started=now, band_started=None,
+                   finished=None, exit_code=None, repeat=hub.repeat, run=1, run_started=now,
                    bands=[b for b, _ in steps if b is not None])
     threading.Thread(target=job_thread, args=(steps, ppm, env), daemon=True).start()
 
@@ -800,6 +823,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": stop_scan()})
             if path == "/api/location":
                 return self.set_location(body)
+            if path == "/api/repeat":
+                # tick/untick while running: unticked, the run in progress is the last
+                hub.repeat = bool(body.get("repeat"))
+                hub.set_status(repeat=hub.repeat)
+                return self.reply(200, {"repeat": hub.repeat})
             if path == "/api/clear":
                 if body.get("confirm") is not True:
                     raise BadRequest("confirm required")

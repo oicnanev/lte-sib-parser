@@ -49,13 +49,18 @@ function tick() {
     const total = (Date.now() - Date.parse(st.started)) / 1000;
     const band = st.band_started && st.step
       ? ` (${stepLabel(st.band)} ${hms((Date.now() - Date.parse(st.band_started)) / 1000)})` : "";
-    el.textContent = `⏱ ${hms(total)}${band}`;
+    // repeating: which run, and how long this one has taken
+    const run = st.repeat || st.run > 1
+      ? ` · run ${st.run} ${hms((Date.now() - Date.parse(st.run_started || st.started)) / 1000)}` +
+        (st.repeat ? " ↻" : " (last)") : "";
+    el.textContent = `⏱ ${hms(total)}${run}${band}`;
   } else if (st.started && st.finished) {
     // st.bands: the steps that have a band (LTE bands, "2G"), not an LTE list
     const steps = st.bands || [];
     const lte = steps.filter((b) => /^\d+$/.test(String(b))).length;
-    const parts = [lte > 1 ? `${lte} bands` : "", steps.includes("2G") ? "with 2G" : ""].filter(Boolean);
-    el.textContent = `last run ${hms((Date.parse(st.finished) - Date.parse(st.started)) / 1000)}` +
+    const parts = [st.run > 1 ? `${st.run} runs` : "", lte > 1 ? `${lte} bands` : "",
+      steps.includes("2G") ? "with 2G" : ""].filter(Boolean);
+    el.textContent = `last ${st.run > 1 ? "session" : "run"} ${hms((Date.parse(st.finished) - Date.parse(st.started)) / 1000)}` +
       (parts.length ? ` (${parts.join(", ")})` : "");
   } else {
     el.textContent = "";
@@ -451,6 +456,12 @@ applySdr(false);
 try { form.gsm.checked = localStorage.getItem("gsm") === "1"; } catch (e) {}
 form.gsm.onchange = () => { try { localStorage.setItem("gsm", form.gsm.checked ? "1" : "0"); } catch (e) {} };
 
+// "Repeat until Stop" (not remembered: a page reload must not start endless runs).
+// Changed during a run it applies at once: unticked, the run in progress is the last.
+form.repeat.onchange = () => {
+  if (status.running) api("/api/repeat", { repeat: form.repeat.checked }).catch((e) => ($("#form-error").textContent = e.message));
+};
+
 function updateFormMode() {
   const mode = form.mode.value;
   document.querySelector(".for-band").style.display = mode === "list" || mode === "gsm" ? "none" : "";
@@ -468,6 +479,7 @@ form.onsubmit = async (e) => {
   const body = Object.fromEntries(new FormData(form));
   body.recursive = form.recursive.checked;
   body.gsm = form.gsm.checked;
+  body.repeat = form.repeat.checked;
   try {
     await api("/api/scan", body);
   } catch (err) {
@@ -478,6 +490,7 @@ $("#stop").onclick = () => api("/api/stop", {}).catch((e) => ($("#form-error").t
 
 function showStatus(st) {
   status = st;
+  if (st.running) form.repeat.checked = !!st.repeat; // e.g. another tab changed it
   tick();
   const b = $("#state");
   b.textContent = st.running ? "running" : "idle";

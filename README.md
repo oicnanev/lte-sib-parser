@@ -344,6 +344,11 @@ Open <http://localhost:8080>. It shows:
 - **Activity**: the scan's live output, in a panel that opens like Known
   EARFCNs (closed by default; opening it jumps to the latest lines). The
   current task and EARFCN are always shown in the header.
+- **Repeat until Stop** (tick box above Run): the server starts the same scan
+  again as soon as it ends, e.g. while driving; each run is its own scan in the
+  database. Unticked during a run, that run is the last; Stop ends it at once.
+  A run that fails within 15 s (SDR unplugged) is not repeated. Not remembered
+  across page reloads. The stopwatch shows the run: `⏱ 12:40 · run 7 1:05 ↻`.
 - **Stopwatch** in the header: elapsed time of the run and of the current band
   while scanning (the step: `B20`, `LTE` for an EARFCN list or preset, `2G`),
   then `last run 13:46 (6 bands)` or `(6 bands, with 2G)`. The scan filter shows each

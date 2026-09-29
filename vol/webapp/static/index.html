@@ -96,6 +96,7 @@
         </div>
         <label class="check for-lte"><input name="recursive" type="checkbox"> Follow SIB5 neighbours</label>
         <label class="check for-lte" title="after LTE: wide captures of GSM-900 and DCS-1800 (bladeRF or HackRF), ~30 s with a bladeRF"><input name="gsm" type="checkbox"> Also 2G (GSM 900/1800)</label>
+        <label class="check" title="start the same scan again as soon as it ends, e.g. while driving; each run is its own scan. Untick during a run to make it the last one"><input name="repeat" type="checkbox"> Repeat until Stop</label>
         <div class="buttons">
           <button type="submit" id="run">Run</button>
           <button type="button" id="stop" disabled>Stop</button>
