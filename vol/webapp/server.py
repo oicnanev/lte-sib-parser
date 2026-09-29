@@ -8,6 +8,8 @@
 # a fix, otherwise the browser's geolocation or a position set on the map; the
 # effective position is written to the location file read by parse_save_sib.py.
 import argparse
+import csv
+import io
 import json
 import os
 import queue
@@ -237,6 +239,49 @@ def list_scans():
             "SELECT s.*, (SELECT COUNT(*) FROM readings r WHERE r.scan_id = s.id) AS readings "
             "FROM scans s ORDER BY s.id DESC")
         return [dict(r) for r in rows]
+
+
+def export_csv(scan_id=None):
+    """(filename, CSV bytes) of every reading, or one scan's, with every column
+    (MIB/SIB/GSM system information as JSON) and the scan's start and band"""
+    q = ("SELECT s.started AS scan_started, s.band AS scan_band, r.* FROM readings r "
+         "LEFT JOIN scans s ON s.id = r.scan_id")
+    args = ()
+    if scan_id is not None:
+        q += " WHERE r.scan_id = ?"
+        args = (scan_id,)
+    with db() as conn:
+        cur = conn.execute(q + " ORDER BY r.id", args)
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(cols)
+    rat = cols.index("rat")
+    for r in rows:
+        r = list(r)
+        r[rat] = r[rat] or "LTE"  # NULL means LTE in the database
+        w.writerow(r)
+    stamp = time.strftime("%Y%m%d-%H%M")
+    name = "lte-sib-parser_%s_%s.csv" % ("scan-%d" % scan_id if scan_id is not None else "all", stamp)
+    return name, out.getvalue().encode()
+
+
+def clear_readings():
+    """delete every reading and scan (the learned EARFCN list stays); refused
+    while a scan runs"""
+    if hub.status.get("running"):
+        raise BadRequest("a scan is running: stop it first")
+    with db() as conn:
+        n_read = conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
+        n_scan = conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0]
+        conn.execute("DELETE FROM readings")
+        conn.execute("DELETE FROM scans")
+        conn.commit()
+        conn.execute("VACUUM")
+    hub.add_log("[webapp] database cleared: %d readings, %d scans" % (n_read, n_scan))
+    hub.send("cleared", {"readings": n_read, "scans": n_scan})
+    return {"readings": n_read, "scans": n_scan}
 
 
 def db_watch_thread():
@@ -715,6 +760,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, earfcn_table())
         if path == "/api/scans":
             return self.reply(200, list_scans())
+        if path == "/api/export.csv":
+            sid = parse_qs(url.query).get("scan_id", [None])[0]
+            name, data = export_csv(int(sid) if sid and sid.isdigit() else None)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/api/readings":
             sid = parse_qs(url.query).get("scan_id", [None])[0]
             return self.reply(200, list_readings(int(sid) if sid and sid.isdigit() else None))
@@ -744,6 +800,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": stop_scan()})
             if path == "/api/location":
                 return self.set_location(body)
+            if path == "/api/clear":
+                if body.get("confirm") is not True:
+                    raise BadRequest("confirm required")
+                return self.reply(200, clear_readings())
         except BadRequest as e:
             return self.reply(400, {"error": str(e)})
         return self.reply(404, {"error": "not found"})

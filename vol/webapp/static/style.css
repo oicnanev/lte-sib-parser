@@ -126,6 +126,9 @@ button.active { outline: 2px solid var(--accent); }
 .table-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .table-head h2 { margin: 0; }
 .table-head label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.table-actions { margin-left: auto; display: flex; gap: 6px; }
+.table-actions button { padding: 3px 10px; font-size: 12px; }
+button.danger { color: var(--danger); border-color: var(--danger); }
 .table-head select { max-width: 60vw; padding: 3px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .table-wrap { overflow: auto; margin-top: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }

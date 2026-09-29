@@ -146,6 +146,10 @@
           <select id="scan-filter"><option value="">all</option></select>
         </label>
         <span id="count" class="muted"></span>
+        <span class="table-actions">
+          <button id="export-csv" type="button" title="the scan chosen in Scan, or all of them: every column, MIB/SIBs as JSON">Export CSV</button>
+          <button id="clear-db" type="button" class="danger" title="delete every reading and scan (export first)">Clear DB…</button>
+        </span>
       </div>
       <div class="table-wrap">
         <table id="readings">

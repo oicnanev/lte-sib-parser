@@ -326,6 +326,32 @@ $("#readings tbody").onclick = (e) => {
 };
 $("#scan-filter").onchange = () => renderTable();
 
+// export: the scan chosen in the filter, or every scan
+$("#export-csv").onclick = () => {
+  const sid = $("#scan-filter").value;
+  window.location.href = "/api/export.csv" + (sid ? "?scan_id=" + encodeURIComponent(sid) : "");
+};
+
+$("#clear-db").onclick = async () => {
+  const scans = $("#scan-filter").options.length - 1;
+  if (!confirm(`Delete all ${readings.size} readings of ${scans} scan(s)?\n\n` +
+      "This cannot be undone: export them first (Export CSV with Scan = all).\n" +
+      "The Known EARFCNs list is kept.")) return;
+  try {
+    const r = await api("/api/clear", { confirm: true });
+    appendLog([`[webapp] cleared ${r.readings} readings, ${r.scans} scans`]);
+  } catch (err) {
+    alert("Not cleared: " + err.message);
+  }
+};
+
+function onCleared() {
+  readings.clear();
+  $("#scan-filter").value = "";
+  renderTable();
+  loadScans();
+}
+
 async function loadScans() {
   const scans = await api("/api/scans");
   const sel = $("#scan-filter");
@@ -528,6 +554,7 @@ function connect() {
       api("/api/location", { ...lastGeo, source: "browser" }).catch(() => {});
     }
   });
+  es.addEventListener("cleared", () => onCleared()); // also from another tab
   es.addEventListener("reading", (e) => {
     const r = JSON.parse(e.data);
     readings.set(r.id, r);

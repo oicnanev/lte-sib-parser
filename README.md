@@ -546,6 +546,14 @@ supported.
 row per EARFCN, so the same cell read at different places or times gives
 separate rows.
 
+In the web app, **Export CSV** (next to the Scan filter) downloads the chosen
+scan, or every scan with the filter on *all*: one row per reading with every
+column (MIB, SIBs and GSM system information as JSON) plus the scan's start
+and band, `rat` = `LTE` or `GSM` (`/api/export.csv[?scan_id=N]`). **Clear DB…**
+deletes every reading and scan after a confirmation (export first: it cannot
+be undone); the Known EARFCNs list is kept, and it is refused while a scan
+runs.
+
 Table `scans`: `id`, `started`, `finished`, `band`, `ppm`, `args`.
 Learned EARFCNs are kept apart, in `vol/output/earfcns_learned.json` (see
 [Known EARFCNs](#known-earfcns)).
