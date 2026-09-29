@@ -101,6 +101,12 @@ function rsrpColor(rsrp) {
 // LTE bands are numbers (B20), GSM ones names (GSM900)
 const bandLabel = (b) => (/^\d+$/.test(String(b)) ? `B${b}` : String(b ?? ""));
 const isGsm = (r) => r.rat === "GSM";
+// what stands in for a missing CGI. GSM "BSIC only": the SCH decoded (it only
+// exists in GSM, so not 3G) but no system information did: weak or interfered
+const missingCgi = (r, lteDefault = "") => isGsm(r)
+  ? ((r.gsm_si ?? []).length ? "no SI3" : "BSIC only (weak signal)")
+  : r.detection === "pss" ? "detected only" : lteDefault;
+const cgiHtml = (r) => (r.cgi != null ? esc(r.cgi) : `<span class="muted">${esc(missingCgi(r))}</span>`);
 const decodedText = (r) => isGsm(r)
   ? (r.gsm_si.length ? "SI " + r.gsm_si.map((k) => k.slice(2)).join(" ") : "BSIC only")
   : r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
@@ -124,7 +130,7 @@ function drawReadings() {
     const rows = list.map((r) =>
       `<tr><td>${esc(bandLabel(r.band))}</td><td>${esc(r.dl_freq_mhz ?? "")} MHz</td><td>${esc(r.earfcn)}</td>` +
       `<td>${isGsm(r) ? "BSIC" : "PCI"} ${esc(r.pci ?? "?")}</td>` +
-      `<td>${esc(r.cgi ?? (r.detection === "pss" ? "detected only" : ""))}</td>` +
+      `<td>${cgiHtml(r)}</td>` +
       `<td>${r.rsrp != null ? esc(r.rsrp) + " dBm" : ""}</td></tr>`).join("");
     m.bindPopup(`<b>${list.length} reading(s)</b><br>${esc(list[0].location_source ?? "")}` +
       (list[0].accuracy_m ? ` ±${Math.round(list[0].accuracy_m)} m` : "") +
@@ -295,7 +301,7 @@ function renderTable(freshId) {
       `<td>${esc(time)}</td><td>${esc(r.band)}</td>` +
       `<td>${r.dl_freq_mhz != null ? esc(r.dl_freq_mhz) + " MHz" : ""}</td>` +
       `<td>${r.bandwidth_mhz != null ? esc(r.bandwidth_mhz) + " MHz" : ""}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
-      `<td>${esc(r.cgi ?? "")}</td><td>${esc(r.plmns ?? "")}</td><td>${esc(r.tac ?? "")}</td>` +
+      `<td>${cgiHtml(r)}</td><td>${esc(r.plmns ?? "")}</td><td>${esc(r.tac ?? "")}</td>` +
       `<td>${esc(r.enb_id ?? "")}</td><td>${esc(r.cell_id ?? "")}</td>` +
       `<td class="rsrp" style="color:${rsrpColor(r.rsrp)}">${r.rsrp != null ? esc(r.rsrp) : ""}</td>` +
       `<td>${esc(sibs)}</td><td>${loc}</td></tr>`;
@@ -351,18 +357,22 @@ async function showDetail(id) {
 
 function showGsmDetail(r) {
   const g = r.gsm ?? {};
-  $("#detail-title").textContent = `ARFCN ${r.earfcn} · BSIC ${r.pci ?? "?"} · ${r.cgi ?? "no SI3"}`;
+  const si = g.si ?? {};
+  const nsi = Object.keys(si).length;
+  $("#detail-title").textContent = `ARFCN ${r.earfcn} · BSIC ${r.pci ?? "?"} · ` +
+    (r.cgi ?? (nsi ? "no SI3" : "BSIC only (weak signal)"));
   const fields = [
     ["Time", r.time], ["Updated", r.updated], ["Scan", r.scan_id], ["Band", r.band],
     ["DL frequency", r.dl_freq_mhz != null ? r.dl_freq_mhz + " MHz" : ""],
     ["PLMN", r.plmns], ["LAC", r.tac], ["CI", r.cell_id],
     ["Level", g.level_dbfs != null ? g.level_dbfs + " dBFS (relative, not calibrated)" : ""],
-    ["Detection", "GSM BCCH decoded by gsm_scan.py"],
+    ["Detection", nsi ? "GSM BCCH decoded by gsm_scan.py"
+      : "GSM cell found by its FCCH/SCH (BSIC), but no system information decoded: " +
+        "weak signal or interference from a nearby channel. Not 3G: UMTS has no FCCH/SCH."],
     ["Location", r.lat != null ? `${r.lat}, ${r.lon}` : ""],
     ["Accuracy", r.accuracy_m != null ? Math.round(r.accuracy_m) + " m" : ""],
     ["Location source", r.location_source], ["Location time", r.location_time],
   ];
-  const si = g.si ?? {};
   const blocks = Object.keys(si).sort().map((k) =>
     `<details${k === "si3" ? " open" : ""}><summary>${esc(k.toUpperCase())}</summary>` +
     `<pre>${esc(JSON.stringify(si[k], null, 2))}</pre></details>`);

@@ -504,8 +504,12 @@ the [readings database](#readings-database). Nothing is transmitted.
 Limits: SI2 neighbour lists are decoded only in the "bit map 0" format
 (GSM-900); other formats (range 128/256/512/1024, variable bit map, used on
 DCS-1800) are kept as hex. The level is in dBFS, not dBm (not calibrated).
-Cells weaker than ~-70 dBFS give the BSIC but often no SI3 in 1.2 s. 3G is
-not supported.
+Cells weaker than ~-70 dBFS give the BSIC but often no SI3 in 1.2 s; the web
+app shows them as "BSIC only (weak signal)" (or "no SI3" when other SI
+decoded). They are GSM cells, not 3G: the BSIC comes from the SCH, found via
+the FCCH tone, and a UMTS carrier (5 MHz of WCDMA) has neither. A cell next to
+a stronger one (e.g. 200 kHz away) can also stop at the BSIC. 3G is not
+supported.
 
 ## Readings database
 
