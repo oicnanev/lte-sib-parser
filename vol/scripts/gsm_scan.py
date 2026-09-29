@@ -159,6 +159,7 @@ def save(conn, scan_id, band_label, r, loc, gain):
     freq = round(gsm_decode.arfcn_freq(r["arfcn"]) / 1e6, 1)
     rid = readings_db.create_reading(conn, scan_id, r["arfcn"], band_label, freq, loc, detection="gsm")
     fields = {"rat": "GSM", "pci": r["bsic"], "rsrp": readings_db.gsm_rssi(r["level_dbfs"], gain),
+              "bandwidth_mhz": readings_db.GSM_BANDWIDTH_MHZ,
               "gsm": json.dumps({"bsic": r["bsic"], "level_dbfs": r["level_dbfs"], "df_hz": r["df_hz"], "si": si})}
     if lai:
         fields.update(mcc=lai["mcc"], mnc=lai["mnc"], plmns="%s-%s" % (lai["mcc"], lai["mnc"]), tac=lai["lac"])

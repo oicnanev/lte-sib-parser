@@ -546,7 +546,9 @@ the [readings database](#readings-database). Nothing is transmitted.
 Limits: SI2 neighbour lists are decoded only in the "bit map 0" format
 (GSM-900); other formats (range 128/256/512/1024, variable bit map, used on
 DCS-1800) are kept as hex. The level is in dBFS, not dBm (not calibrated).
-Each GSM reading has an **RSSI** (the BCCH carrier's power, what a phone
+GSM readings have a bandwidth of 0.2 MHz (every GSM carrier is 200 kHz wide;
+filled in for older readings when the database is opened). Each GSM reading
+has an **RSSI** (the BCCH carrier's power, what a phone
 reports as RxLev) in dBm in the `rsrp` column, shown in the table's
 *RSRP / RSSI* column and exported: the level in dBFS minus the capture gain,
 with srsue's offset (`dBFS + 30 - (gain + 62)`, `readings_db.gsm_rssi`). It is

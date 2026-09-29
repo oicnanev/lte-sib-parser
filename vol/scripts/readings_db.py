@@ -71,6 +71,9 @@ MIGRATIONS = [("readings", "bandwidth_mhz", "REAL"), ("readings", "detection", "
 MIB_BANDWIDTH = {"n6": 1.4, "n15": 3, "n25": 5, "n50": 10, "n75": 15, "n100": 20}
 
 
+# every GSM carrier is 200 kHz wide
+GSM_BANDWIDTH_MHZ = 0.2
+
 # capture gains gsm_scan.py uses when none is given (bladeRF dB, HackRF "lna,vga")
 GSM_GAINS = {"bladerf": {"GSM900": "15", "DCS1800": "30"}, "hackrf": {"GSM900": "24,16", "DCS1800": "32,20"}}
 
@@ -111,6 +114,8 @@ def connect(path):
         if col not in cols:
             conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
     _backfill_gsm_rssi(conn)
+    conn.execute("UPDATE readings SET bandwidth_mhz = ? WHERE rat = 'GSM' AND bandwidth_mhz IS NULL",
+                 (GSM_BANDWIDTH_MHZ,))
     conn.commit()
     return conn
 

@@ -427,6 +427,7 @@ function showGsmDetail(r) {
   const fields = [
     ["Time", r.time], ["Updated", r.updated], ["Scan", r.scan_id], ["Band", r.band],
     ["DL frequency", r.dl_freq_mhz != null ? r.dl_freq_mhz + " MHz" : ""],
+    ["Bandwidth", r.bandwidth_mhz != null ? r.bandwidth_mhz + " MHz (every GSM carrier)" : ""],
     ["PLMN", r.plmns], ["LAC", r.tac], ["CI", r.cell_id],
     ["RSSI", r.rsrp != null ? r.rsrp + " dBm (BCCH carrier power, not calibrated: compare with other GSM readings, not with LTE RSRP)" : ""],
     ["Level", g.level_dbfs != null ? g.level_dbfs + " dBFS (at the SDR, before the gain is taken out)" : ""],
