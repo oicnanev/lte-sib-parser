@@ -346,7 +346,8 @@ Open <http://localhost:8080>. It shows:
   current task and EARFCN are always shown in the header.
 - **Operators** in the PLMNs column: a coloured badge per PLMN (268-01
   Vodafone, 268-02 DIGI, 268-03 NOS, 268-06 MEO; both for RAN sharing, e.g.
-  `268-01 268-03`), then the codes. Logo files named by PLMN in
+  `268-01 268-03`), with the code in its tooltip; any other PLMN (e.g. abroad)
+  is shown as its code. The database and the CSV keep the codes. Logo files named by PLMN in
   `vol/webapp/static/logos/` (`268-01.svg`, `.png`, ...) replace the badges;
   they stay out of git (trademarks, public repository). Page only: nothing in
   the database, no effect on scanning.

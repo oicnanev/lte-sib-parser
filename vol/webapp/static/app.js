@@ -133,14 +133,16 @@ let logos = {}; // plmn -> URL, from /api/logos
 function plmnHtml(plmns) {
   const codes = String(plmns ?? "").split(/\s+/).filter(Boolean);
   if (!codes.length) return "";
+  // known operators: only the logo or badge (the code in its tooltip); any
+  // other PLMN (e.g. abroad) as its code
   const marks = codes.map((p) => {
     const op = OPERATORS[p];
     const label = op ? `${op.name} (${p})` : p;
     if (logos[p]) return `<img class="op-logo" src="${esc(logos[p])}" alt="${esc(label)}" title="${esc(label)}">`;
-    if (op) return `<span class="op-badge" style="background:${op.bg};color:${op.fg}" title="${esc(p)}">${esc(op.name)}</span>`;
-    return "";
+    if (op) return `<span class="op-badge" style="background:${op.bg};color:${op.fg}" title="${esc(label)}">${esc(op.name)}</span>`;
+    return `<span>${esc(p)}</span>`;
   }).join("");
-  return `<span class="plmn-wrap">${marks}<span class="muted">${esc(codes.join(" "))}</span></span>`;
+  return `<span class="plmn-wrap">${marks}</span>`;
 }
 const decodedText = (r) => isGsm(r)
   ? (r.gsm_si.length ? "SI " + r.gsm_si.map((k) => k.slice(2)).join(" ") : "BSIC only")
