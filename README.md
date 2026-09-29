@@ -139,6 +139,23 @@ gpspipe -w -n 10 | grep TPV      # should show "mode":2 or 3 with lat/lon
 gpsd listens on `127.0.0.1:2947`; the container reaches it through the host
 network.
 
+**A phone's GPS instead of a receiver** (e.g. on a MacBook, which has no GPS:
+its location is Wi-Fi based). On Android, *GPSd Forwarder* (F-Droid, open
+source) sends the phone's NMEA by UDP to a host and port. gpsd reads it with:
+```bash
+# /etc/default/gpsd
+DEVICES="udp://0.0.0.0:29998"
+GPSD_OPTIONS="-n"
+```
+If the scanner runs in a VM behind NAT (UTM's *Shared Network*, VM at e.g.
+192.168.64.3), the phone cannot reach the VM: point the app at the Mac's IP
+(`ipconfig getifaddr en0`, Mac and phone on the same Wi-Fi or the phone's
+hotspot) and relay on the Mac with
+`socat -u UDP-RECV:29998 UDP-SENDTO:192.168.64.3:29998` (`brew install socat`).
+Check with `gpspipe -w -n 5` (TPV with `"mode":3`). Take the app out of
+Android's battery optimisation: when it pauses, readings fall back to the
+browser position. Measured indoors: 3D fix, ±27-49 m; better outdoors.
+
 ### RTL-SDR dongles
 
 The kernel's DVB-T driver grabs RTL2832 dongles; blacklist it so SDR software

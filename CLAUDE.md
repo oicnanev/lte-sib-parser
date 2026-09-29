@@ -219,6 +219,10 @@ cannot be tested end-to-end without it.
       20 MHz), 8 cores total.
     - Expected: srsue phase (~4 of ~5.5 min) split → ~2.5-3 min per Portugal run
       (estimate, to measure).
+17b. 2026-09-29: GPS in the MacBook VM = the user's Android phone: GPSd Forwarder
+    → UDP to the Mac's IP:29998 → `socat` on the Mac → VM 192.168.64.3:29998 →
+    gpsd `udp://0.0.0.0:29998 -n` (README, GPS receiver section). Readings get
+    source gpsd; a pause in the phone app falls back to the browser position.
 18. Android cell scanner idea (notes/android-cell-scanner-guide.md, not in git):
     on hold by the user's decision (2026-09-27).
 19. ✅ srsue retries (`sib-scan.sh -y`, default 1 with -K/-S): failed confirmed
