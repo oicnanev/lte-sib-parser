@@ -572,8 +572,11 @@ through srsRAN's native plugin, built against libbladeRF 2.6.0 in the image:
 - **Gain**: much lower than a HackRF's; 30 on B20/B8 and 40 on B3/B1/B7 worked
   where the signal is strong, 40 already saturated on B20 there (MIB SNR 1.9 dB
   at 40, 11.9 dB at 30).
-- **Antenna on RX1**: srsRAN and the checks use channel RX1 only; RX2, TX1 and
-  TX2 can stay unconnected (the TX module is never enabled). A 1.4 GHz antenna
+- **Antenna on RX1**: srsRAN and the checks use channel RX1; TX1 and TX2 can
+  stay unconnected (the TX module is never enabled). **A second antenna on
+  RX2** is used by `lte_sib_decoder` with `sib-scan.sh -A 2` (web app: *RX
+  antennas* 2, the bladeRF default): both channels are combined (decision 55).
+  srsue, the PSS/SSS checks and 2G still use RX1 only. A 1.4 GHz antenna
   there gave much weaker B3/B7 detections than a wideband one. A Cisco
   4G-LTE-ANTM-D (LTE dipole, 698–960 / 1710–2690 MHz) gave +17.6 dB on B20 and
   +2.9 dB on B8 over the generic telescopic antenna, and about the same on
@@ -1242,6 +1245,24 @@ Changes in this fork, newest last, with the reason for each.
     once missed a strong cell). That cell: SIB1 in 8 of 8 attempts (every SIB
     in 6), none before; known preset + 2G: 1:09 and 1:07, the cell with CGI
     both times.
+
+55. **Two receive antennas on the bladeRF (RX1 + RX2).** Where two sectors of
+    one site overlap on a carrier, RSRP is high but the SINR is 2-5 dB and the
+    decoder needs re-acquisitions or fails. The bladeRF has a second receive
+    channel: `bladerf_rx.patch` now opens RX1+RX2 when asked for 2 channels
+    (`BLADERF_RX_X2`, interleaved samples split per channel on read, gain on
+    both, shared LO and rate), and `lte_sib_decoder -A 2` passes both to the
+    cell search, PBCH, `ue_sync` and `ue_dl`, which combine them; captures
+    keep one buffer per channel. A/B with two identical antennas, 3 rounds:
+    B8 3475 (sector overlap) + B3 1875, every SIB in 9 of 9 decodes with 2
+    antennas against 6 of 9 with 1, and 11-15 s against 21-26 s (fewer
+    re-acquisitions). It does not help against a co-channel interferer: on
+    B20 6400 one sector (PCI 65) gets its SIB1 DCI in every subframe but no
+    PDSCH ever decodes, with 1 or 2 antennas (probably the other sector's
+    SIB1 on the same resources; combining adds signal, it does not cancel
+    interference); the other sector (63) decodes and fills the reading. Known
+    preset + 2G with 2 antennas: 1:08 and 0:58, 15 and 16 of 16 cells with
+    SIB1 (1 antenna: 1:09 and 1:07, 14 of 16 and 15 of 15).
 
 ### Known limitations
 

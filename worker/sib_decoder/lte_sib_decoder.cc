@@ -40,6 +40,8 @@
 #include "srsran/srsran.h"
 #include "srsran/srslog/srslog.h"
 
+#define MAX_RX 2 // receive antennas: RX1, or RX1 + RX2 (diversity, combined by ue_dl)
+
 static volatile bool go_exit = false;
 static void          on_signal(int) { go_exit = true; }
 
@@ -59,6 +61,7 @@ struct args_t {
   std::string log_file    = "";
   bool        server      = false;
   bool        verbose     = false;
+  uint32_t    nof_rx      = 1;   // -A 2: RX1 + RX2 (bladeRF), combined by ue_dl
 };
 
 static void usage(const char* prog)
@@ -75,14 +78,15 @@ static void usage(const char* prog)
          "  -1 S        SIB1 wait after the MIB (default 1.5; up to 4 acquisitions per carrier)\n"
          "  -T S        longest wait for the next SI message (default 6; normally 3 periods of the slowest SI missing)\n"
          "  -l FILE     log file (default stdout, one-carrier mode)\n"
-         "  -v          print each cell search attempt\n",
+         "  -v          print each cell search attempt\n"
+         "  -A N        receive antennas: 1 (RX1) or 2 (RX1 + RX2, diversity)\n",
          prog, prog);
 }
 
 static void parse_args(args_t& a, int argc, char** argv)
 {
   int opt;
-  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vh")) != -1) {
+  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vA:h")) != -1) {
     switch (opt) {
       case 'e': a.earfcn = atoi(optarg); break;
       case 's': a.server = true; break;
@@ -96,6 +100,7 @@ static void parse_args(args_t& a, int argc, char** argv)
       case 'T': a.si_s = atof(optarg); break;
       case 'l': a.log_file = optarg; break;
       case 'v': a.verbose = true; break;
+      case 'A': a.nof_rx = std::min(std::max(atoi(optarg), 1), MAX_RX); break;
       default: usage(argv[0]); exit(opt == 'h' ? 0 : 1);
     }
   }
@@ -144,15 +149,16 @@ static void log_content(FILE* f, const T& msg)
  * (carrier to baseband) before the decimation, and time is counted in samples. */
 struct rx_t {
   srsran_rf_t            rf       = {};
+  uint32_t               nof_rx   = 1;
   double                 hw_srate = 0; // fixed hardware rate, 0 if the device rate is changed
   uint32_t               ratio    = 1;
-  srsran_resampler_fft_t dec      = {};
+  srsran_resampler_fft_t dec[MAX_RX] = {};
   bool                   dec_init = false;
-  cf_t*                  tmp      = nullptr;
+  cf_t*                  tmp[MAX_RX] = {};
   uint32_t               tmp_len  = 0;
   // capture in RAM
   bool     from_buf = false;
-  cf_t*    buf      = nullptr;
+  cf_t*    buf[MAX_RX] = {};
   uint64_t buf_len  = 0;
   uint64_t buf_pos  = 0;
   cf_t     nco      = 1; // current phasor of the frequency shift
@@ -193,16 +199,22 @@ static int set_srate(rx_t& rx, double srate)
       return -1;
     }
     if (rx.dec_init && rx.ratio == ratio) {
-      srsran_resampler_fft_reset_state(&rx.dec);
+      for (uint32_t c = 0; c < rx.nof_rx; c++) {
+        srsran_resampler_fft_reset_state(&rx.dec[c]);
+      }
       return 0;
     }
     if (rx.dec_init) {
-      srsran_resampler_fft_free(&rx.dec);
+      for (uint32_t c = 0; c < rx.nof_rx; c++) {
+        srsran_resampler_fft_free(&rx.dec[c]);
+      }
       rx.dec_init = false;
     }
     if (ratio > 1) {
-      if (srsran_resampler_fft_init(&rx.dec, SRSRAN_RESAMPLER_MODE_DECIMATE, ratio)) {
-        return -1;
+      for (uint32_t c = 0; c < rx.nof_rx; c++) {
+        if (srsran_resampler_fft_init(&rx.dec[c], SRSRAN_RESAMPLER_MODE_DECIMATE, ratio)) {
+          return -1;
+        }
       }
       rx.dec_init = true;
     }
@@ -221,27 +233,37 @@ static int set_srate(rx_t& rx, double srate)
 
 static int recv_cb(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srsran_timestamp_t* t)
 {
-  rx_t&    rx  = *(rx_t*)h;
-  uint32_t n   = nsamples * rx.ratio;
-  cf_t*    dst = data[0];
+  rx_t&    rx               = *(rx_t*)h;
+  uint32_t n                = nsamples * rx.ratio;
+  cf_t*    dst[MAX_RX]      = {};
+  for (uint32_t c = 0; c < rx.nof_rx; c++) {
+    dst[c] = data[c];
+  }
   if (rx.ratio > 1) {
     if (n > rx.tmp_len) {
-      free(rx.tmp);
-      rx.tmp     = srsran_vec_cf_malloc(n);
+      for (uint32_t c = 0; c < rx.nof_rx; c++) {
+        free(rx.tmp[c]);
+        rx.tmp[c] = srsran_vec_cf_malloc(n);
+      }
       rx.tmp_len = n;
     }
-    dst = rx.tmp;
+    for (uint32_t c = 0; c < rx.nof_rx; c++) {
+      dst[c] = rx.tmp[c];
+    }
   }
   int ret;
   if (rx.from_buf) {
     if (rx.buf_pos + n > rx.buf_len) {
       return -1; // end of the capture (callers stop earlier, see capture_left)
     }
-    const cf_t* src = rx.buf + rx.buf_pos;
-    cf_t        ph  = rx.nco;
-    for (uint32_t i = 0; i < n; i++) {
-      dst[i] = src[i] * ph;
-      ph *= rx.nco_step;
+    cf_t ph = rx.nco;
+    for (uint32_t c = 0; c < rx.nof_rx; c++) {
+      const cf_t* src = rx.buf[c] + rx.buf_pos;
+      ph              = rx.nco; // the same shift for every antenna
+      for (uint32_t i = 0; i < n; i++) {
+        dst[c][i] = src[i] * ph;
+        ph *= rx.nco_step;
+      }
     }
     rx.nco = ph / sqrtf(__real__ ph * __real__ ph + __imag__ ph * __imag__ ph); // keep |phasor| = 1
     rx.buf_pos += n;
@@ -251,14 +273,18 @@ static int recv_cb(void* h, cf_t* data[SRSRAN_MAX_PORTS], uint32_t nsamples, srs
     ret = n;
   } else {
     void* ptr[SRSRAN_MAX_CHANNELS] = {};
-    ptr[0]                         = dst;
+    for (uint32_t c = 0; c < rx.nof_rx; c++) {
+      ptr[c] = dst[c];
+    }
     ret = srsran_rf_recv_with_time_multi(&rx.rf, ptr, n, true, t ? &t->full_secs : nullptr,
                                          t ? &t->frac_secs : nullptr);
   }
   if (ret < 0 || rx.ratio == 1) {
     return ret;
   }
-  srsran_resampler_fft_run(&rx.dec, rx.tmp, data[0], n);
+  for (uint32_t c = 0; c < rx.nof_rx; c++) {
+    srsran_resampler_fft_run(&rx.dec[c], rx.tmp[c], data[c], n);
+  }
   return nsamples;
 }
 
@@ -524,10 +550,10 @@ static const char* process_carrier(rx_t&         rx,
     // decodes (a weak or false PSS/SSS detection fails there), else search again
     srsran_ue_cellsearch_t cs;
     srsran_ue_mib_sync_t   ue_mib;
-    if (srsran_ue_cellsearch_init_multi(&cs, SRSRAN_DEFAULT_MAX_FRAMES_PSS, recv_cb, 1, &rx)) {
+    if (srsran_ue_cellsearch_init_multi(&cs, SRSRAN_DEFAULT_MAX_FRAMES_PSS, recv_cb, rx.nof_rx, &rx)) {
       return "error";
     }
-    if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, 1, &rx)) {
+    if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, rx.nof_rx, &rx)) {
       srsran_ue_cellsearch_free(&cs);
       return "error";
     }
@@ -610,9 +636,11 @@ static const char* process_carrier(rx_t&         rx,
     return "mib";
   }
   uint32_t max_samples                 = 3 * SRSRAN_SF_LEN_PRB(cell.nof_prb);
-  cf_t*    sf_buf[SRSRAN_MAX_PORTS]    = {};
+  cf_t*    sf_buf[SRSRAN_MAX_PORTS]    = {}; // one per receive antenna
   uint8_t* data[SRSRAN_MAX_CODEWORDS] = {};
-  sf_buf[0]                            = srsran_vec_cf_malloc(max_samples);
+  for (uint32_t c = 0; c < rx.nof_rx; c++) {
+    sf_buf[c] = srsran_vec_cf_malloc(max_samples);
+  }
   data[0]                              = srsran_vec_u8_malloc(2000 * 8);
 
   srsran_ue_sync_t       ue_sync;
@@ -623,9 +651,9 @@ static const char* process_carrier(rx_t&         rx,
   srsran_pdsch_cfg_t     pdsch_cfg = {};
   combine_t              cb;
   const char*            status = "mib";
-  if (srsran_ue_sync_init_multi_decim(&ue_sync, cell.nof_prb, false, recv_cb, 1, &rx, 0) ||
+  if (srsran_ue_sync_init_multi_decim(&ue_sync, cell.nof_prb, false, recv_cb, rx.nof_rx, &rx, 0) ||
       srsran_ue_sync_set_cell(&ue_sync, cell) || srsran_ue_mib_init(&ue_mib, sf_buf[0], cell.nof_prb) ||
-      srsran_ue_mib_set_cell(&ue_mib, cell) || srsran_ue_dl_init(&ue_dl, sf_buf, cell.nof_prb, 1) ||
+      srsran_ue_mib_set_cell(&ue_mib, cell) || srsran_ue_dl_init(&ue_dl, sf_buf, cell.nof_prb, rx.nof_rx) ||
       srsran_ue_dl_set_cell(&ue_dl, cell) || srsran_softbuffer_rx_init(&cb.comb, cell.nof_prb) ||
       srsran_softbuffer_rx_init(&cb.single, cell.nof_prb)) {
     fprintf(stderr, "Error initialising the PHY\n");
@@ -663,7 +691,7 @@ static const char* process_carrier(rx_t&         rx,
   double     last_sfn  = rx_clock(rx);
   uint32_t   n_reset   = 0;
   while (!go_exit && rx_clock(rx) < deadline && capture_left(rx) && !(st.done() && st.rsrp_logged)) {
-    cf_t* bufs[SRSRAN_MAX_CHANNELS] = {sf_buf[0]};
+    cf_t* bufs[SRSRAN_MAX_CHANNELS] = {sf_buf[0], sf_buf[1]};
     int   n                         = srsran_ue_sync_zerocopy(&ue_sync, bufs, max_samples);
     if (n < 0) {
       fprintf(stderr, "ue_sync error\n");
@@ -777,7 +805,9 @@ static const char* process_carrier(rx_t&         rx,
   srsran_ue_sync_free(&ue_sync);
   srsran_softbuffer_rx_free(&cb.comb);
   srsran_softbuffer_rx_free(&cb.single);
-  free(sf_buf[0]);
+  for (uint32_t c = 0; c < rx.nof_rx; c++) {
+    free(sf_buf[c]);
+  }
   free(data[0]);
   return status;
 }
@@ -832,10 +862,14 @@ static bool capture(rx_t& rx, double center, float gain, double seconds)
   }
   uint64_t n = (uint64_t)(seconds * rx.hw_srate);
   if (n > buf_cap) {
-    free(rx.buf);
-    rx.buf  = srsran_vec_cf_malloc(n);
-    buf_cap = rx.buf ? n : 0;
-    if (!rx.buf) {
+    bool ok = true;
+    for (uint32_t c = 0; c < rx.nof_rx; c++) {
+      free(rx.buf[c]);
+      rx.buf[c] = srsran_vec_cf_malloc(n);
+      ok &= rx.buf[c] != nullptr;
+    }
+    buf_cap = ok ? n : 0;
+    if (!ok) {
       fprintf(stderr, "no memory for a %.1f s capture\n", seconds);
       return false;
     }
@@ -847,12 +881,12 @@ static bool capture(rx_t& rx, double center, float gain, double seconds)
   // drop what the SDR buffered before and while retuning: libbladeRF alone
   // holds up to ~50 ms (32 buffers + 16 transfers of 32768 samples at 30.72 MSPS)
   for (uint64_t d = 0; d < (uint64_t)(0.2 * rx.hw_srate); d += chunk) {
-    void* ptr[SRSRAN_MAX_CHANNELS] = {rx.buf};
+    void* ptr[SRSRAN_MAX_CHANNELS] = {rx.buf[0], rx.buf[1]};
     srsran_rf_recv_with_time_multi(&rx.rf, ptr, chunk, true, nullptr, nullptr);
   }
   for (uint64_t pos = 0; pos < n; pos += chunk) {
     uint32_t len                   = (uint32_t)std::min<uint64_t>(chunk, n - pos);
-    void*    ptr[SRSRAN_MAX_CHANNELS] = {rx.buf + pos};
+    void*    ptr[SRSRAN_MAX_CHANNELS] = {rx.buf[0] + pos, rx.buf[1] ? rx.buf[1] + pos : nullptr};
     if (srsran_rf_recv_with_time_multi(&rx.rf, ptr, len, true, nullptr, nullptr) < 0) {
       return false;
     }
@@ -872,7 +906,7 @@ static int probe_earfcn(rx_t& rx, int earfcn, double center, double offset, floa
     return -1;
   }
   srsran_ue_cellsearch_t cs;
-  if (srsran_ue_cellsearch_init_multi(&cs, 8, recv_cb, 1, &rx)) {
+  if (srsran_ue_cellsearch_init_multi(&cs, 8, recv_cb, rx.nof_rx, &rx)) {
     return -1;
   }
   srsran_ue_cellsearch_set_nof_valid_frames(&cs, 4);
@@ -888,7 +922,7 @@ static int probe_earfcn(rx_t& rx, int earfcn, double center, double offset, floa
   // decodes. A 16-bit CRC over up to 40 frames x 4 SFN offsets x 3 port counts
   // passes by chance on ~1 EARFCN in 150: a second decode must give the same MIB.
   srsran_ue_mib_sync_t ue_mib;
-  if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, 1, &rx)) {
+  if (srsran_ue_mib_sync_init_multi(&ue_mib, recv_cb, rx.nof_rx, &rx)) {
     return -1;
   }
   int order[3] = {0, 1, 2};
@@ -1046,9 +1080,10 @@ int main(int argc, char** argv)
 
   rx_t rx;
   rx.hw_srate = args.hw_srate;
+  rx.nof_rx   = args.nof_rx;
   double t0   = now_s();
   if (srsran_rf_open_devname(&rx.rf, args.dev_name.empty() ? nullptr : args.dev_name.c_str(),
-                             (char*)args.dev_args.c_str(), 1)) {
+                             (char*)args.dev_args.c_str(), rx.nof_rx)) {
     fprintf(stderr, "Error opening RF device\n");
     printf("error opening the RF device\n");
     return 1;

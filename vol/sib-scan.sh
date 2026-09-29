@@ -11,6 +11,9 @@ show_help () {
           with -d bladeRF): the SDR is opened once per scan and each carrier
           takes ~1-3 s instead of ~25 s
   -U      use srsue even with -d bladeRF
+  -A      receive antennas for lte_sib_decoder: 1 (RX1, default) or 2 (bladeRF
+          RX1 + RX2, combined; helps cells with interference from a nearby
+          sector: more complete SIBs, fewer re-acquisitions)
   -r      force srsue rf sample rate in Hz, srsue decimates in software
           (the ratio to the cell's sample rate must be an integer).
           Default with -d bladeRF: 30.72e6 (sample-rate changes take ~4 s
@@ -102,7 +105,7 @@ containsElement () {
 DEC_PID=""
 dec_start () {
   [[ -n $DEC_PID ]] && kill -0 $DEC_PID 2>/dev/null && return 0
-  coproc DEC { exec lte_sib_decoder -s -d "$device_name" -a "$device_args" "${dec_srate[@]}" 2>&1; }
+  coproc DEC { exec lte_sib_decoder -s -A "$nof_rx" -d "$device_name" -a "$device_args" "${dec_srate[@]}" 2>&1; }
   DEC_PID=$DEC_PID
   local line
   while read -r -t 60 -u "${DEC[0]}" line; do
@@ -174,6 +177,7 @@ wide_list=""
 srate_args=()
 ppm="0"
 use_decoder=""
+nof_rx=1
 
 do_cellsearch=1
 do_sweep=0
@@ -187,7 +191,7 @@ no_requrse=0
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XU?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUA:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -240,6 +244,8 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XU?" opt; do
     X)  use_decoder=1
       ;;
     U)  use_decoder=0
+      ;;
+    A)  nof_rx=$OPTARG
       ;;
   esac
 done

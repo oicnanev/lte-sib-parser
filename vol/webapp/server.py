@@ -416,6 +416,7 @@ def build_job(p):
             common += [flag, str(v)]
     if not p.get("recursive", False):
         common.append("-n")
+    common += antenna_args(p)
     common += ["-R", READINGS_DB, "-D", CELLS_DB, "-L", location.LOCATION_FILE]
 
     gain = number(p, "gain")
@@ -562,6 +563,13 @@ def earfcn_table(filename="portugal.txt"):
     return rows
 
 
+def antenna_args(p):
+    """-A 2: bladeRF RX1 + RX2 for lte_sib_decoder"""
+    if p.get("device") == "bladeRF" and str(p.get("antennas", "1")) == "2":
+        return ["-A", "2"]
+    return []
+
+
 def known_job(p, filename):
     """one sib-scan.sh -K run over the known EARFCNs"""
     earfcns, wide = known_earfcns(filename)
@@ -589,6 +597,7 @@ def known_job(p, filename):
         v = number(p, key)
         if v is not None:
             args += [flag, str(v)]
+    args += antenna_args(p)
     args += ["-R", READINGS_DB, "-D", CELLS_DB, "-L", location.LOCATION_FILE]
     ppm = str(p.get("ppm", "")).strip()
     if ppm and ppm != "auto":

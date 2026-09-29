@@ -86,7 +86,9 @@ cannot be tested end-to-end without it.
   saturates B20 there. Antenna must be on **RX1** (wideband one; a 1.4 GHz
   antenna there hurt B3/B7). Decodes 20 MHz cells (EARFCN 500, PRB 100).
   AGC is on by default: `bladeRF-cli` needs `set agc rx off` before `set gain`.
-  Only RX1 is used; TX module is never enabled (bladerf_rx.patch).
+  TX module is never enabled (bladerf_rx.patch). Since 2026-09-29 a second
+  identical antenna is on RX2: lte_sib_decoder -A 2 / sib-scan -A 2 / web app
+  "RX antennas" (README 55); srsue, bladeRF-cli checks and 2G use RX1 only.
   Sample-rate changes are slow (1.92 MSPS 1.56 s, full cycle ~4 s): sib-scan
   uses `--rf.srate 30.72e6` by default for -d bladeRF (plugin reads in chunks,
   bladerf_rx.patch). srsue start-up ~9 s per cell regardless of SDR. With the

@@ -397,14 +397,15 @@ const form = $("#scan-form");
 // best values measured per SDR (Cisco 4G-LTE-ANTM-D antenna, strong-signal site;
 // with the HackRF's stock antenna gains were 56 / 70)
 const SDR_DEFAULTS = {
-  hackrf: { device: "soapy", device_args: "driver=hackrf", gain: 44, gain_high: 56, t: 30, T: 30, hackrf_low_gain: "24,16" },
-  bladerf: { device: "bladeRF", device_args: "", gain: 15, gain_high: 40, t: 45, T: 30, hackrf_low_gain: "" },
+  hackrf: { device: "soapy", device_args: "driver=hackrf", gain: 44, gain_high: 56, t: 30, T: 30, hackrf_low_gain: "24,16", antennas: "1" },
+  bladerf: { device: "bladeRF", device_args: "", gain: 15, gain_high: 40, t: 45, T: 30, hackrf_low_gain: "", antennas: "2" },
 };
 
 function applySdr(save) {
   const d = SDR_DEFAULTS[form.sdr.value];
   if (d) for (const [k, v] of Object.entries(d)) form[k].value = v;
   document.querySelector(".for-hackrf").style.display = form.sdr.value === "bladerf" ? "none" : "";
+  document.querySelector(".for-bladerf").style.display = form.sdr.value === "bladerf" ? "" : "none";
   // with a bladeRF, sweep means wide captures searched by lte_sib_decoder (no
   // hackrf_sweep); the known-EARFCN preset is still the fastest start
   if (form.sdr.value === "bladerf" && form.mode.value === "cell_search") {

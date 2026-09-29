@@ -1,16 +1,17 @@
 diff --git a/lib/src/phy/rf/rf_blade_imp.c b/lib/src/phy/rf/rf_blade_imp.c
-index 16c2f6cd2..853cc5cde 100644
+index 16c2f6cd2..e24561484 100644
 --- a/lib/src/phy/rf/rf_blade_imp.c
 +++ b/lib/src/phy/rf/rf_blade_imp.c
-@@ -41,6 +41,7 @@ typedef struct {
+@@ -41,6 +41,8 @@ typedef struct {
    bool                rx_stream_enabled;
    bool                tx_stream_enabled;
    srsran_rf_info_t    info;
 +  uint64_t            rx_samples; /* samples read since the RX stream started */
++  uint32_t            nof_rx;     /* lte-sib-parser: 1 (RX1) or 2 (RX1 + RX2) */
  } rf_blade_handler_t;
  
  static srsran_rf_error_handler_t blade_error_handler     = NULL;
-@@ -75,7 +76,7 @@ int rf_blade_start_tx_stream(void* h)
+@@ -75,7 +77,7 @@ int rf_blade_start_tx_stream(void* h)
  
    status = bladerf_sync_config(handler->dev,
                                 BLADERF_TX_X1,
@@ -19,7 +20,7 @@ index 16c2f6cd2..853cc5cde 100644
                                 num_buffers,
                                 buffer_size_tx,
                                 num_transfers,
-@@ -98,42 +99,39 @@ int rf_blade_start_rx_stream(void* h, UNUSED bool now)
+@@ -98,41 +100,42 @@ int rf_blade_start_rx_stream(void* h, UNUSED bool now)
    int                 status;
    rf_blade_handler_t* handler = (rf_blade_handler_t*)h;
  
@@ -41,10 +42,13 @@ index 16c2f6cd2..853cc5cde 100644
 +   * calls on bladeRF 2.0 (libbladeRF 2.6, FPGA 0.16), reported as overruns, and
 +   * srsue kept losing SFN sync. The stream is continuous; RX time is counted. */
 +  handler->rx_samples = 0;
++  /* lte-sib-parser: with 2 channels (RX1 + RX2, receive diversity) the layout
++   * is RX_X2: samples of both channels interleaved, counts are the total */
    status = bladerf_sync_config(handler->dev,
-                                BLADERF_RX_X1,
+-                               BLADERF_RX_X1,
 -                               BLADERF_FORMAT_SC16_Q11_META,
 -                               num_buffers,
++                               handler->nof_rx == 2 ? BLADERF_RX_X2 : BLADERF_RX_X1,
 +                               BLADERF_FORMAT_SC16_Q11,
 +                               num_buffers_rx,
                                 buffer_size_rx,
@@ -66,23 +70,138 @@ index 16c2f6cd2..853cc5cde 100644
 -    ERROR("Failed to configure TX sync interface: %s", bladerf_strerror(status));
 -    return status;
 -  }
-+  /* lte-sib-parser: the TX module is neither configured nor enabled here (it
-+   * was, although the scan never transmits): it stays off, whatever is on the
-+   * TX ports. */
-   status = bladerf_enable_module(handler->dev, BLADERF_RX_X1, true);
-   if (status != 0) {
-     ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
-     return status;
-   }
+-  status = bladerf_enable_module(handler->dev, BLADERF_RX_X1, true);
+-  if (status != 0) {
+-    ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
+-    return status;
+-  }
 -  status = bladerf_enable_module(handler->dev, BLADERF_TX_X1, true);
 -  if (status != 0) {
 -    ERROR("Failed to enable TX module: %s", bladerf_strerror(status));
 -    return status;
--  }
++  /* lte-sib-parser: the TX module is neither configured nor enabled here (it
++   * was, although the scan never transmits): it stays off, whatever is on the
++   * TX ports. */
++  for (uint32_t ch = 0; ch < handler->nof_rx; ch++) {
++    status = bladerf_enable_module(handler->dev, BLADERF_CHANNEL_RX(ch), true);
++    if (status != 0) {
++      ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
++      return status;
++    }
+   }
    handler->rx_stream_enabled = true;
    return 0;
+@@ -141,10 +144,13 @@ int rf_blade_start_rx_stream(void* h, UNUSED bool now)
+ int rf_blade_stop_rx_stream(void* h)
+ {
+   rf_blade_handler_t* handler = (rf_blade_handler_t*)h;
+-  int                 status  = bladerf_enable_module(handler->dev, BLADERF_RX_X1, false);
+-  if (status != 0) {
+-    ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
+-    return status;
++  int                 status  = 0;
++  for (uint32_t ch = 0; ch < handler->nof_rx; ch++) {
++    status = bladerf_enable_module(handler->dev, BLADERF_CHANNEL_RX(ch), false);
++    if (status != 0) {
++      ERROR("Failed to enable RX module: %s", bladerf_strerror(status));
++      return status;
++    }
+   }
+   status = bladerf_enable_module(handler->dev, BLADERF_TX_X1, false);
+   if (status != 0) {
+@@ -168,9 +174,23 @@ float rf_blade_get_rssi(UNUSED void* h)
+   return 0;
  }
-@@ -439,30 +437,28 @@ int rf_blade_recv_with_time(void*       h,
+ 
+-int rf_blade_open_multi(char* args, void** h, UNUSED uint32_t nof_channels)
++int rf_blade_open_multi(char* args, void** h, uint32_t nof_channels)
+ {
+-  return rf_blade_open(args, h);
++  int status = rf_blade_open(args, h);
++  if (status != SRSRAN_SUCCESS || nof_channels < 2) {
++    return status;
++  }
++  /* lte-sib-parser: RX2 as well (same LO and sample rate as RX1) */
++  rf_blade_handler_t* handler = (rf_blade_handler_t*)*h;
++  handler->nof_rx             = 2;
++  status = bladerf_set_gain_mode(handler->dev, BLADERF_CHANNEL_RX(1), BLADERF_GAIN_MGC);
++  if (status == 0) {
++    status = bladerf_set_gain(handler->dev, BLADERF_CHANNEL_RX(1), (bladerf_gain)handler->info.max_rx_gain);
++  }
++  if (status != 0) {
++    ERROR("Failed to set up RX2: %s", bladerf_strerror(status));
++  }
++  return status;
+ }
+ 
+ int rf_blade_open(char* args, void** h)
+@@ -221,6 +241,7 @@ int rf_blade_open(char* args, void** h)
+   }
+   handler->rx_stream_enabled = false;
+   handler->tx_stream_enabled = false;
++  handler->nof_rx            = 1;
+ 
+   /* Set default sampling rates */
+   rf_blade_set_tx_srate(handler, 1.92e6);
+@@ -293,10 +314,12 @@ int rf_blade_set_rx_gain(void* h, double gain)
+ {
+   int                 status;
+   rf_blade_handler_t* handler = (rf_blade_handler_t*)h;
+-  status                      = bladerf_set_gain(handler->dev, BLADERF_RX_X1, (bladerf_gain)gain);
+-  if (status != 0) {
+-    ERROR("Failed to set RX gain: %s", bladerf_strerror(status));
+-    return SRSRAN_ERROR;
++  for (uint32_t ch = 0; ch < handler->nof_rx; ch++) {
++    status = bladerf_set_gain(handler->dev, BLADERF_CHANNEL_RX(ch), (bladerf_gain)gain);
++    if (status != 0) {
++      ERROR("Failed to set RX gain: %s", bladerf_strerror(status));
++      return SRSRAN_ERROR;
++    }
+   }
+   return SRSRAN_SUCCESS;
+ }
+@@ -424,7 +447,39 @@ int rf_blade_recv_with_time_multi(void*    h,
+                                   time_t*  secs,
+                                   double*  frac_secs)
+ {
+-  return rf_blade_recv_with_time(h, *data, nsamples, blocking, secs, frac_secs);
++  rf_blade_handler_t* handler = (rf_blade_handler_t*)h;
++  if (handler->nof_rx < 2) {
++    return rf_blade_recv_with_time(h, *data, nsamples, blocking, secs, frac_secs);
++  }
++  /* lte-sib-parser: RX_X2 delivers I0 Q0 I1 Q1 ... (SC16 Q11), split per channel */
++  const float scale = 1.0f / 2048;
++  uint32_t    done  = 0;
++  while (done < nsamples) {
++    uint32_t n = nsamples - done;
++    if (4 * n > CONVERT_BUFFER_SIZE) {
++      n = CONVERT_BUFFER_SIZE / 4;
++    }
++    int status = bladerf_sync_rx(handler->dev, handler->rx_buffer, 2 * n, NULL, 2000);
++    if (status) {
++      ERROR("RX failed: %s; nsamples=%d;", bladerf_strerror(status), n);
++      return -1;
++    }
++    float*         d0 = (float*)data[0] + 2 * done;
++    float*         d1 = data[1] ? (float*)data[1] + 2 * done : NULL;
++    const int16_t* in = handler->rx_buffer;
++    for (uint32_t i = 0; i < n; i++) {
++      d0[2 * i]     = in[4 * i] * scale;
++      d0[2 * i + 1] = in[4 * i + 1] * scale;
++      if (d1) {
++        d1[2 * i]     = in[4 * i + 2] * scale;
++        d1[2 * i + 1] = in[4 * i + 3] * scale;
++      }
++    }
++    done += n;
++  }
++  timestamp_to_secs(handler->rx_rate, handler->rx_samples, secs, frac_secs);
++  handler->rx_samples += nsamples;
++  return nsamples;
+ }
+ 
+ int rf_blade_recv_with_time(void*       h,
+@@ -439,30 +494,28 @@ int rf_blade_recv_with_time(void*       h,
    int                     status;
  
    memset(&meta, 0, sizeof(meta));

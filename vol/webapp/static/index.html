@@ -77,6 +77,9 @@
             <input name="gain_high" type="number" value="70" min="0" max="120">
           </label>
         </div>
+        <label class="for-bladerf" title="bladeRF: RX1 only, or RX1 + RX2 with a second antenna (combined; helps where two sectors of a site overlap)">RX antennas (bladeRF)
+          <select name="antennas"><option value="1">1 (RX1)</option><option value="2">2 (RX1 + RX2)</option></select>
+        </label>
         <label class="for-hackrf" title="HackRF lna,vga for the PSS/SSS captures below 1 GHz; 24,16 with a Cisco LTE antenna (32,20 overloaded it), empty = 32,20">Capture gain &lt; 1 GHz (HackRF)
           <input name="hackrf_low_gain" placeholder="lna,vga e.g. 24,16">
         </label>
