@@ -444,7 +444,8 @@ would need one SDR per band.
 Each reading stores the position at the moment its first message was decoded,
 from exactly one source, in this order:
 
-1. **gpsd**, when it reports a 2D/3D fix (see [GPS receiver](#gps-receiver-optional));
+1. **gpsd**, when its last 2D/3D fix is at most 30 s old (see
+   [GPS receiver](#gps-receiver-optional)); the reading keeps that fix's time;
 2. otherwise the **browser's geolocation**, which on a laptop is Wi-Fi based
    (typically 20–100 m); the browser asks for permission first;
 3. if that is missing or not good enough, **Correct on map** and click where you
@@ -1297,6 +1298,16 @@ Changes in this fork, newest last, with the reason for each.
     which refused to start, and every cell fell back to srsue. `sib-scan.sh`
     now checks that the decoder knows `-A` and otherwise says to rebuild the
     image; "Build and run" says to rebuild after a pull.
+
+56. **gpsd: last fix up to 30 s old, without waiting.** With the phone's GPS
+    relayed over Wi-Fi (GPSd Forwarder → Mac → VM), the stream stops for
+    seconds, sometimes minutes. `location.from_gpsd` used to wait up to 2 s for
+    the next fix: with gpsd running but no GPS, every reading paid it, and a
+    known preset + 2G run took 1:48 instead of ~1:05. It now asks gpsd for its
+    last fix (`?POLL`, answered in ~2 ms) and uses it if it is at most 30 s old
+    (`MAX_FIX_AGE_S`); the web app's fallback to the browser position waits
+    30 s too (`GPS_STALE_S`, was 5 s). Short gaps keep the GPS position; the
+    fix time is stored with the reading, so its age is visible.
 
 ### Known limitations
 

@@ -38,7 +38,7 @@ CELLS_DB = os.path.join(VOL, "output", "cells.sqlite")
 LEARNED = os.path.join(VOL, "output", "earfcns_learned.json")
 BANDS_DB = os.path.join(VOL, "helpers", "lte_bands.sqlite3")
 DEVICES = {"soapy", "UHD", "bladeRF", ""}
-GPS_STALE_S = 5
+GPS_STALE_S = 30  # same as location.MAX_FIX_AGE_S: a phone over Wi-Fi has gaps
 # bands swept by the "Portugal" preset: the FDD bands Portuguese operators use for
 # LTE (B38/TDD is left out: lte_pss.py assumes FDD)
 # order matters: automatic ppm calibration runs on the first band, and a band
