@@ -174,6 +174,16 @@ Inside the container:
 
 Results are written to `vol/output/` (ignored by git).
 
+**After a `git pull`, rebuild the image** when anything under `worker/`
+changed (the decoders and srsRAN patches are compiled into it), then restart
+the web app:
+```bash
+git pull && docker compose build && sudo systemctl restart lte-sib-parser-webapp
+```
+The scripts in `vol/` are used straight from the checkout, so without the
+rebuild they can ask the old binaries for options they do not have;
+`sib-scan.sh` warns about this and falls back to srsue.
+
 Or start the [web app](#web-app):
 ```bash
 docker compose up webapp          # then open http://localhost:8080
@@ -1263,6 +1273,13 @@ Changes in this fork, newest last, with the reason for each.
     interference); the other sector (63) decodes and fills the reading. Known
     preset + 2G with 2 antennas: 1:08 and 0:58, 15 and 16 of 16 cells with
     SIB1 (1 antenna: 1:09 and 1:07, 14 of 16 and 15 of 15).
+
+56. **Warning when the image is older than the scripts.** A run on the x86
+    PC took 10:49 instead of ~1:30: after `git pull` brought the RX1 + RX2
+    change, `sib-scan.sh` passed `-A` to an `lte_sib_decoder` built before it,
+    which refused to start, and every cell fell back to srsue. `sib-scan.sh`
+    now checks that the decoder knows `-A` and otherwise says to rebuild the
+    image; "Build and run" says to rebuild after a pull.
 
 ### Known limitations
 

@@ -259,6 +259,13 @@ if [[ $use_decoder -eq 1 ]] && ! command -v lte_sib_decoder >/dev/null; then
   echo "lte_sib_decoder not installed (rebuild the image): using srsue"
   use_decoder=0
 fi
+# scripts updated by git pull, image not rebuilt: the old decoder rejects the new
+# options and every cell silently fell back to srsue (a 1:30 run took 10 min)
+if [[ $use_decoder -eq 1 ]] && ! lte_sib_decoder -h 2>&1 | grep -q -- "^ *-A "; then
+  echo "WARNING: lte_sib_decoder in the image is older than the scripts (no -A):"
+  echo "WARNING: rebuild it (docker compose build) and restart the web app; using srsue"
+  use_decoder=0
+fi
 # bladeRF + decoder: the decoder's own cell search replaces the PSS/SSS
 # pre-check of -K (bladeRF-cli captures, ~75 s for the Portugal list, which
 # was most of the scan); its clock (~1 ppm) needs no correction to find cells,
