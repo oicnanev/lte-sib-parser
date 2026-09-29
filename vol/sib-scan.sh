@@ -519,11 +519,11 @@ while true; do
                 earfcn_scanned+=($((earfcn-2)) $((earfcn-1)) $((earfcn+1)) $((earfcn+2)))
             fi
             # success means SIB1 (the cell identity), not just the MIB
-            # (with the decoder only where a cell was found, i.e. a MIB: it already
-            # acquired up to 4 times, and an empty EARFCN costs ~5 s per try)
-            if ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" --sib1 "$earfcn" &&
-               [[ ${tries[$earfcn]:-0} -lt $retries ]] &&
-               { [[ $use_decoder -eq 0 ]] || python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; }; then
+            # (srsue only: lte_sib_decoder already acquires a cell up to 4 times;
+            # cells from a wide capture are queued for a live decode in wide_scan)
+            if [[ $use_decoder -eq 0 ]] &&
+               ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" --sib1 "$earfcn" &&
+               [[ ${tries[$earfcn]:-0} -lt $retries ]]; then
                 tries[$earfcn]=$(( ${tries[$earfcn]:-0} + 1 ))
                 echo "no SIB1 on $earfcn: will retry at the end"
                 retry_queue+=($earfcn)

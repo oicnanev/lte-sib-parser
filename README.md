@@ -1214,6 +1214,20 @@ Changes in this fork, newest last, with the reason for each.
     and the numpy version put its buffers in `/dev/shm` without checking the
     space (Docker's default is 64 MB), which hung the pool.
 
+53. **Known-EARFCN preset + 2G from 1:33 to ~1:04.** Timing a run: 8 s
+    opening the bladeRF, ~25 s on five EARFCNs without a cell (5 s of search
+    each), ~15 s on a weak cell that the decoder acquired 4 times and
+    `sib-scan.sh` then retried 4 times more, ~13 s on a cell whose SI
+    messages stalled after SIB1 (6 s wait after each new SIB), ~18 s decoding
+    the rest, ~8 s for 2G. Changes: the decoder's search + MIB limit is 2 s
+    (cells show up within ~1 s); it waits for a missing SI message 3
+    periods of the slowest one still missing (from SIB1's schedule, capped at
+    `-T`, 6 s) instead of 6 s; and with the decoder `sib-scan.sh` does not
+    retry a carrier (cells of a wide capture still get their live decode).
+    Two runs: 1:04 and 1:03, 15 and 16 LTE cells all with SIB1 and SIB2/3
+    (before: 1:33, 16 cells, 15 with SIB1), plus 25-28 GSM cells. A weak cell
+    (B8 3525, -78 dBm) can now be missed by the shorter search.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

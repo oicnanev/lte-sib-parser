@@ -50,11 +50,11 @@ struct args_t {
   std::string dev_name    = "";
   std::string dev_args    = "";
   double      hw_srate    = 0;   // 0: change the device rate per phase
-  float       search_s    = 5;   // cell search + MIB
+  float       search_s    = 2;   // cell search + MIB (real cells show up within ~1 s)
   float       sib1_s      = 1.5; // SIB1 after the MIB (sent every 20 ms; if the timing
                                  // lock is good it comes within ~0.2 s)
   float       carrier_s   = 12;  // total per carrier: new acquisitions while no SIB1
-  float       si_s        = 6;   // after the last new SIB (SI periodicity up to 5.12 s)
+  float       si_s        = 6;   // cap on the wait for the next SI message (see si_wait)
   float       gain_offset = 62;  // srsue's phy.rx_gain_offset, so RSRP values compare
   std::string log_file    = "";
   bool        server      = false;
@@ -71,9 +71,9 @@ static void usage(const char* prog)
          "  -d NAME     RF device (bladeRF, soapy, UHD, ...; default: first found)\n"
          "  -a ARGS     RF device arguments\n"
          "  -r HZ       fixed hardware sample rate, decimated in software (e.g. 30.72e6)\n"
-         "  -t S        cell search + MIB time limit (default 5)\n"
+         "  -t S        cell search + MIB time limit (default 2)\n"
          "  -1 S        SIB1 wait after the MIB (default 1.5; up to 4 acquisitions per carrier)\n"
-         "  -T S        wait after the last new SIB (default 6)\n"
+         "  -T S        longest wait for the next SI message (default 6; normally 3 periods of the slowest SI missing)\n"
          "  -l FILE     log file (default stdout, one-carrier mode)\n"
          "  -v          print each cell search attempt\n",
          prog, prog);
@@ -269,6 +269,7 @@ struct si_state_t {
   std::set<int>    received;
   uint32_t         win_ms = 0; // SI window length (SIB1 si-WindowLength)
   std::vector<int> period;     // SI periodicity in frames, per SI message, in SIB1's order
+  std::vector<std::set<int> > si_sibs; // SIB numbers each SI message carries
   bool             rsrp_done = false;
   bool          done() const
   {
@@ -281,6 +282,26 @@ static int sib_number(const std::string& s)
   // "sib2", "sib13-v920", "sibType3" -> 2, 13, 3
   size_t i = s.find_first_of("0123456789");
   return i == std::string::npos ? -1 : atoi(s.c_str() + i);
+}
+
+// how long to wait for the SI messages still missing: 3 periods of the slowest
+// one (each is sent once per period, in its window), capped at cap_s. Without
+// SIB1's schedule, cap_s.
+static double si_wait(const si_state_t& st, double cap_s)
+{
+  int longest = 0; // frames
+  for (size_t k = 0; k < st.si_sibs.size() && k < st.period.size(); k++) {
+    for (int n : st.si_sibs[k]) {
+      if (!st.received.count(n)) {
+        longest = std::max(longest, st.period[k]);
+        break;
+      }
+    }
+  }
+  if (longest == 0) {
+    return st.si_sibs.empty() ? cap_s : 0.5; // nothing missing (RSRP may still be pending)
+  }
+  return std::min(cap_s, 3 * longest * 0.01 + 0.2);
 }
 
 // returns true if something new was decoded
@@ -302,8 +323,13 @@ static bool handle_dlsch(FILE* f, si_state_t& st, uint8_t* payload, uint32_t nby
     st.win_ms = c1.sib_type1().si_win_len.to_number();
     for (auto& si : c1.sib_type1().sched_info_list) {
       st.period.push_back(si.si_periodicity.to_number());
+      st.si_sibs.emplace_back();
+      if (st.si_sibs.size() == 1) {
+        st.si_sibs.back().insert(2); // SIB2 is always in the first SI message
+      }
       for (auto& t : si.sib_map_info) {
         st.expected.insert(sib_number(t.to_string()));
+        st.si_sibs.back().insert(sib_number(t.to_string()));
       }
     }
     log_content(f, msg);
@@ -586,7 +612,7 @@ static const char* process_carrier(rx_t&         rx,
   uint32_t   sfn       = 0;
   float      rsrp_sum  = 0;
   int        rsrp_n    = 0;
-  double     deadline  = rx_clock(rx) + (st.have_sib1 ? args.si_s : args.sib1_s);
+  double     deadline  = rx_clock(rx) + (st.have_sib1 ? si_wait(st, args.si_s) : args.sib1_s);
   uint32_t   n_sf = 0, n_nosync = 0, n_nosfn = 0, n_dci = 0, n_crc = 0;
   uint32_t   prev_sf   = 0;
   uint32_t   frames_since_pbch = 0;
@@ -688,7 +714,7 @@ static const char* process_carrier(rx_t&         rx,
                srsran_ue_sync_get_cfo(&ue_sync), ue_dl.chest_res.cfo * 15000);
       }
       if (crc && handle_dlsch(f, st, data[0], pdsch_cfg.grant.tb[0].tbs / 8)) {
-        deadline = rx_clock(rx) + args.si_s; // something new: keep listening
+        deadline = rx_clock(rx) + si_wait(st, args.si_s); // something new: keep listening
       }
     }
     if (sf_idx == 9) {
