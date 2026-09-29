@@ -344,6 +344,12 @@ Open <http://localhost:8080>. It shows:
 - **Activity**: the scan's live output, in a panel that opens like Known
   EARFCNs (closed by default; opening it jumps to the latest lines). The
   current task and EARFCN are always shown in the header.
+- **Operators** in the PLMNs column: a coloured badge per PLMN (268-01
+  Vodafone, 268-02 DIGI, 268-03 NOS, 268-06 MEO; both for RAN sharing, e.g.
+  `268-01 268-03`), then the codes. Logo files named by PLMN in
+  `vol/webapp/static/logos/` (`268-01.svg`, `.png`, ...) replace the badges;
+  they stay out of git (trademarks, public repository). Page only: nothing in
+  the database, no effect on scanning.
 - **Repeat until Stop** (tick box above Run): the server starts the same scan
   again as soon as it ends, e.g. while driving; each run is its own scan in the
   database. Unticked during a run, that run is the last; Stop ends it at once.

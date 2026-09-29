@@ -127,6 +127,9 @@ button.active { outline: 2px solid var(--accent); }
 .table-head h2 { margin: 0; }
 .table-head label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .table-actions { margin-left: auto; display: flex; gap: 6px; }
+.plmn-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.op-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; line-height: 1.5; }
+.op-logo { height: 16px; width: auto; vertical-align: middle; }
 .table-actions button { padding: 3px 10px; font-size: 12px; }
 button.danger { color: var(--danger); border-color: var(--danger); }
 .table-head select { max-width: 60vw; padding: 3px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }

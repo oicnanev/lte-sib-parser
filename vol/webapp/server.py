@@ -54,7 +54,25 @@ EARFCN_LISTS = os.path.join(VOL, "helpers", "earfcns")
 LOG_LINES = 500
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+                ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+# operator logos the user adds (not in git: trademarks), named by PLMN: 268-01.svg
+LOGOS = os.path.join(STATIC, "logos")
+LOGO_EXT = (".svg", ".png", ".webp", ".jpg", ".jpeg")
+
+
+def list_logos():
+    """{"268-01": "/static/logos/268-01.svg", ...} for the logo files present"""
+    out = {}
+    try:
+        names = sorted(os.listdir(LOGOS))
+    except OSError:
+        return out
+    for n in names:
+        plmn, ext = os.path.splitext(n)
+        if ext.lower() in LOGO_EXT and re.fullmatch(r"\d{3}-\d{2,3}", plmn):
+            out.setdefault(plmn, "/static/logos/" + n)
+    return out
 
 
 class Hub:
@@ -779,6 +797,8 @@ class Handler(BaseHTTPRequestHandler):
             bands = [dict(band=b, **v) for b, v in sorted(bands_table().items())]
             presets = [dict(id=k, **v) for k, v in PRESETS.items()]
             return self.reply(200, {"bands": bands, "presets": presets})
+        if path == "/api/logos":
+            return self.reply(200, list_logos())
         if path == "/api/earfcns":
             return self.reply(200, earfcn_table())
         if path == "/api/scans":

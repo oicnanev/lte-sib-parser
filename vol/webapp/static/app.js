@@ -121,6 +121,27 @@ const missingCgi = (r, lteDefault = "") => isGsm(r)
   ? ((r.gsm_si ?? []).length ? "no SI3" : "BSIC only (weak signal)")
   : r.detection === "pss" ? "detected only" : lteDefault;
 const cgiHtml = (r) => (r.cgi != null ? esc(r.cgi) : `<span class="muted">${esc(missingCgi(r))}</span>`);
+// operators by PLMN: coloured badge, or the user's logo from static/logos/
+// (<plmn>.svg/.png, not in git: trademarks). RAN sharing lists several PLMNs.
+const OPERATORS = {
+  "268-01": { name: "Vodafone", bg: "#e60000", fg: "#fff" },
+  "268-02": { name: "DIGI", bg: "#1d4f9c", fg: "#fff" },
+  "268-03": { name: "NOS", bg: "#111827", fg: "#fff" },
+  "268-06": { name: "MEO", bg: "#00a3e0", fg: "#fff" },
+};
+let logos = {}; // plmn -> URL, from /api/logos
+function plmnHtml(plmns) {
+  const codes = String(plmns ?? "").split(/\s+/).filter(Boolean);
+  if (!codes.length) return "";
+  const marks = codes.map((p) => {
+    const op = OPERATORS[p];
+    const label = op ? `${op.name} (${p})` : p;
+    if (logos[p]) return `<img class="op-logo" src="${esc(logos[p])}" alt="${esc(label)}" title="${esc(label)}">`;
+    if (op) return `<span class="op-badge" style="background:${op.bg};color:${op.fg}" title="${esc(p)}">${esc(op.name)}</span>`;
+    return "";
+  }).join("");
+  return `<span class="plmn-wrap">${marks}<span class="muted">${esc(codes.join(" "))}</span></span>`;
+}
 const decodedText = (r) => isGsm(r)
   ? (r.gsm_si.length ? "SI " + r.gsm_si.map((k) => k.slice(2)).join(" ") : "BSIC only")
   : r.detection === "pss" ? "detected only" : (r.has_mib ? "MIB " : "") + r.sibs.join(" ");
@@ -315,7 +336,7 @@ function renderTable(freshId) {
       `<td>${esc(time)}</td><td>${esc(r.band)}</td>` +
       `<td>${r.dl_freq_mhz != null ? esc(r.dl_freq_mhz) + " MHz" : ""}</td>` +
       `<td>${r.bandwidth_mhz != null ? esc(r.bandwidth_mhz) + " MHz" : ""}</td><td>${esc(r.earfcn)}</td><td>${esc(r.pci ?? "")}</td>` +
-      `<td>${cgiHtml(r)}</td><td>${esc(r.plmns ?? "")}</td><td>${esc(r.tac ?? "")}</td>` +
+      `<td>${cgiHtml(r)}</td><td>${plmnHtml(r.plmns)}</td><td>${esc(r.tac ?? "")}</td>` +
       `<td>${esc(r.enb_id ?? "")}</td><td>${esc(r.cell_id ?? "")}</td>` +
       `<td class="rsrp" style="color:${rsrpColor(r.rsrp)}">${r.rsrp != null ? esc(r.rsrp) : ""}</td>` +
       `<td>${esc(sibs)}</td><td>${loc}</td></tr>`;
@@ -588,6 +609,7 @@ function connect() {
     '<option value="custom">Custom list…</option>';
   updateFormMode();
   applySdr(false); // again now that the band list (and its presets) exists
+  logos = await api("/api/logos").catch(() => ({}));
   for (const r of await api("/api/readings")) readings.set(r.id, r);
   await loadScans();
   renderTable();

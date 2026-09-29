@@ -4,3 +4,5 @@ vol/output/*
 .vscode
 __pycache__/
 notes/
+vol/webapp/static/logos/*
+!vol/webapp/static/logos/README.md
