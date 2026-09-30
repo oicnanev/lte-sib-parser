@@ -223,6 +223,10 @@ cannot be tested end-to-end without it.
     → UDP to the Mac's IP:29998 → `socat` on the Mac → VM 192.168.64.3:29998 →
     gpsd `udp://0.0.0.0:29998 -n` (README, GPS receiver section). Readings get
     source gpsd; a pause in the phone app falls back to the browser position.
+17c. 2026-09-30: USB GPS (SiRF Star III, PL2303, /dev/ttyUSB0) works on a USB 2
+    extension away from the MacBook/bladeRF (USB 3 noise blinded it: 0 sats);
+    PL2303 hotplug udev rule added in the VM (README GPS section); gpsd
+    DEVICES="/dev/ttyUSB0 udp://0.0.0.0:29998".
 18. Android cell scanner idea (notes/android-cell-scanner-guide.md, not in git):
     on hold by the user's decision (2026-09-27).
 19. ✅ srsue retries (`sib-scan.sh -y`, default 1 with -K/-S): failed confirmed

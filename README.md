@@ -139,6 +139,26 @@ gpspipe -w -n 10 | grep TPV      # should show "mode":2 or 3 with lat/lon
 gpsd listens on `127.0.0.1:2947`; the container reaches it through the host
 network.
 
+**Receivers with a Prolific PL2303** (USB `067b:2303`, e.g. GlobalSat BU-353
+and other SiRF Star III units, `/dev/ttyUSB0`): the gpsd package leaves the
+hotplug rule for this generic USB-serial chip commented out, so gpsd drops the
+receiver when it is unplugged and does not take it back. Enable it for the
+PL2303 only:
+```bash
+echo 'SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="gps%n", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gpsdctl@%k.service"' | sudo tee /etc/udev/rules.d/61-gpsd-pl2303.rules
+sudo udevadm control --reload && sudo systemctl restart gpsd
+```
+Several sources can be listed, first preferred:
+`DEVICES="/dev/ttyUSB0 udp://0.0.0.0:29998"`.
+
+**Keep the GPS receiver away from USB 3.** USB 3 ports, cables and devices
+radiate broadband noise around 1.5 GHz, where GPS L1 is (1575 MHz). Next to
+the MacBook and the bladeRF (USB 3, ~120 MB/s), two SiRF III receivers saw no
+satellite at all for 25 minutes, even outside the window and after cold and
+factory resets; on a 2 m USB 2 extension one had a 3D fix in 15 s (4
+satellites, SNR 30-35 dB). Without a fix these receivers report their
+firmware's default date (June 2026), not an error in the system clock.
+
 **A phone's GPS instead of a receiver** (e.g. on a MacBook, which has no GPS:
 its location is Wi-Fi based). On Android, *GPSd Forwarder* (F-Droid, open
 source) sends the phone's NMEA by UDP to a host and port. gpsd reads it with:
