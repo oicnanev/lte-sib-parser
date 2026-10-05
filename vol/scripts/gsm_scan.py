@@ -225,7 +225,8 @@ def main():
         for i, (b, fc, arfcns) in enumerate(jobs):
             if not rec.wait(i):
                 print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6), flush=True)
-                return 1
+                print("ERROR: the SDR stopped answering: unplug and replug it (in a VM also re-attach it)", flush=True)
+                return 3
             clip = clipping(files[i], a.sdr)
             if clip > 0.002:
                 print("[gsm] %.1f%% of the samples clipped at %.1f MHz: lower the gain" % (100 * clip, fc / 1e6),

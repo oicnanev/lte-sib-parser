@@ -103,6 +103,7 @@ containsElement () {
 # takes ~7 s, decoding one carrier ~1-3 s. It is closed while something else
 # needs the SDR (the PSS/SSS checks with bladeRF-cli) and reopened afterwards.
 DEC_PID=""
+sdr_fail=0
 dec_start () {
   [[ -n $DEC_PID ]] && kill -0 $DEC_PID 2>/dev/null && return 0
   coproc DEC { exec lte_sib_decoder -s -A "$nof_rx" -d "$device_name" -a "$device_args" "${dec_srate[@]}" 2>&1; }
@@ -503,11 +504,26 @@ while true; do
             if [[ $use_decoder -eq 1 ]] && dec_start; then
               echo "[decoder] connecting to $earfcn"
               echo "$earfcn $gain $freq_offset $SRSUELOG" >&"${DEC[1]}"
+              sdr_err=0
               while read -r -t 120 -u "${DEC[0]}" line; do
                 echo "$line"
+                [[ $line =~ RX\ failed|NIOS\ II|fatal\ IO|transfer\ error|Transfer\ timed ]] && sdr_err=1
                 [[ $line == "done $earfcn "* ]] && break
               done
               dec_save "$earfcn" "$SRSUELOG"
+              # the SDR vanished from the USB bus (e.g. a bus-power drop in a VM): every
+              # carrier then fails after minutes of timeouts, so stop after 3 in a row
+              if [[ $sdr_err -eq 1 ]] && ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; then
+                sdr_fail=$((sdr_fail+1))
+              else
+                sdr_fail=0
+              fi
+              if [[ $sdr_fail -ge 3 ]]; then
+                echo "ERROR: the SDR stopped answering (USB errors on $sdr_fail carriers in a row)."
+                echo "ERROR: unplug and replug it (in a VM also re-attach it), then run again."
+                dec_stop
+                exit 3
+              fi
             else
               echo "[srsue] connecting to $earfcn"
               srsue $SRSUECFG --log.filename $SRSUELOG \

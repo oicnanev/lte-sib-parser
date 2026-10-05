@@ -339,6 +339,9 @@ STATUS_RES = [
 NOISE = re.compile(r"^\s*$|^\.+$|^(earfcn|start_earfcn|scanned earfcns|queue to scan earfcn)")
 
 
+SDR_LOST = 3  # exit code of sib-scan.sh / gsm_scan.py when the SDR stopped answering
+
+
 def run_proc(proc):
     """follow one sib-scan.sh run until it exits; returns its exit code"""
     for raw in proc.stdout:
@@ -367,6 +370,9 @@ def job_thread(steps, ppm, env=None):
         code, ppm = run_steps(steps, ppm, env)
         if hub.stop_requested or not hub.repeat:
             break
+        if code == SDR_LOST:
+            hub.add_log("[webapp] SDR lost (USB errors): not repeating. Replug it and start again")
+            break
         if code not in (0, None) and time.time() - t0 < 15:
             # e.g. the SDR unplugged: do not spin on a run that fails at once
             hub.add_log("[webapp] run failed in %.0f s (exit code %s): not repeating" % (time.time() - t0, code))
@@ -387,6 +393,9 @@ def run_steps(steps, ppm, env=None):
     done_mhz = []  # carriers read so far: overlapping bands (e.g. B28/B20) must not read them again
     for i, (band, args) in enumerate(steps):
         if hub.stop_requested:
+            break
+        if code == SDR_LOST:
+            hub.add_log("[webapp] SDR lost: skipping the remaining steps")
             break
         if band == "2G":
             # gsm_scan.py: HackRF clock error from the LTE steps' calibration

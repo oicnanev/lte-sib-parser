@@ -1360,6 +1360,18 @@ Changes in this fork, newest last, with the reason for each.
     30 s too (`GPS_STALE_S`, was 5 s). Short gaps keep the GPS position; the
     fix time is stored with the reading, so its age is visible.
 
+57. **Stop when the SDR stops answering.** In a VM with the bladeRF and a GPS
+    puck on the same USB-C hub of the host, the bladeRF dropped off the bus
+    mid-run (`NIOS II ... timed out`, then `fatal IO error`); the rest of the
+    run, and every "Repeat until Stop" run after it, spent minutes timing out
+    on each carrier. With `lte_sib_decoder`, `sib-scan.sh` now exits with code
+    3 after 3 carriers in a row that showed USB errors and gave no MIB, and
+    `gsm_scan.py` exits with 3 when a capture fails. The web app treats 3 as
+    "SDR lost": it skips the remaining steps (e.g. 2G) and does not repeat.
+    A bus-powered bladeRF needs a port (or a powered hub) of its own: the
+    bladeRF 2.0 micro draws up to ~900 mA, and a second device on the same
+    port can brown it out when it tunes above ~1 GHz at high gain.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
