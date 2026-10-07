@@ -1466,6 +1466,22 @@ Changes in this fork, newest last, with the reason for each.
     in the next run after 10 s (3 runs in a row with exit 3 before it gives
     up). Whether a reopen revives a board in that state is not known yet.
 
+    2G through the daemon, first 6 runs (2026-10-07): 33-38 cells per run
+    (29 before), but only 4, 8, 20, 3, 5, 1 of them with a CGI (SI3), against
+    23-24 of 25-30 with `bladeRF-cli`; a strong cell (ARFCN 15, -79 dBm) never
+    had one. Run-to-run variation that large points at the samples, not the
+    signal: `gsm_decoder` (all cores) was decoding capture i while the daemon
+    was still reading the SDR for capture i+1, and a GSM decode needs 1.2 s
+    without a gap. `gsm_scan.py` now decodes only after the last capture is
+    recorded (costs ~1-2 s). To be checked in the next runs; if the CGI
+    ratio stays low, the next suspects are overruns inside the daemon's read
+    loop and the plugin's gain/bandwidth defaults against `bladeRF-cli`'s.
+    Optional **61.44 MSPS session** (web app: "bladeRF sample rate", passes
+    `-r 61.44e6`; `gsm_scan.py` reads the rate from `/tmp/lte_decoder.cfg`):
+    2G needs 3 captures (GSM-900 in one, DCS-1800 in two, 46 MHz usable)
+    instead of 6. Protocol-tested with the stub only; the LTE side at 61.44
+    (32x decimation, 246 MB/s over the virtual USB) is untested.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

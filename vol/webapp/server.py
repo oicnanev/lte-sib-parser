@@ -676,7 +676,8 @@ def antenna_args(p):
     opening it is what drops it off a VM's USB bus) and -A 2 (RX1 + RX2)"""
     if p.get("device") != "bladeRF":
         return []
-    return ["-P"] + (["-A", "2"] if str(p.get("antennas", "1")) == "2" else [])
+    return (["-P"] + (["-A", "2"] if str(p.get("antennas", "1")) == "2" else [])
+            + (["-r", "61.44e6"] if str(p.get("srate", "")) == "61.44" else []))
 
 
 def known_job(p, filename):

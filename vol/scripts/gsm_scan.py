@@ -43,6 +43,7 @@ SDRS = {
     "bladerf": {"rate": 56e6, "bw": 50e6, "dtype": np.int16, "full": 2048, "gain": {900: "15", 1800: "30"}},
     # same board through the open lte_sib_decoder: its fixed rate, no new open
     "bladerf-dec": {"rate": 30.72e6, "bw": 23e6, "dtype": np.int16, "full": 2048, "gain": {900: "15", 1800: "30"}},
+    "bladerf-dec-61": {"rate": 61.44e6, "bw": 46e6, "dtype": np.int16, "full": 2048, "gain": {900: "15", 1800: "30"}},
     "hackrf": {"rate": 20e6, "bw": 15e6, "dtype": np.int8, "full": 128,
                "gain": {900: os.environ.get("LTE_HACKRF_LOW_GAIN") or "24,16", 1800: "32,20"}},
 }
@@ -167,9 +168,9 @@ class DecoderRecorder:
     lte_sib_decoder ("rec" commands over its FIFOs), one after the other while
     the earlier ones are decoded"""
 
-    def __init__(self, jobs, files, secs, gains, ppm):
+    def __init__(self, sdr, jobs, files, secs, gains, ppm):
         self.jobs, self.files, self.gains, self.ppm, self.secs = jobs, files, gains, ppm, secs
-        self.c = SDRS["bladerf-dec"]
+        self.c = SDRS[sdr]
         self.ok = [False] * len(jobs)
         self.done = [threading.Event() for _ in jobs]
         self.fin = self.fout = None
@@ -223,7 +224,10 @@ class DecoderRecorder:
         self.thread.start()
 
     def wait(self, i):
-        self.done[i].wait(15 + 3 * (self.secs + 0.5) * (i + 1))
+        # decode only once every capture is recorded: gsm_decoder's threads on all the
+        # cores while the daemon is still reading the SDR made the reader fall behind
+        # (samples lost, GSM cells decoded without their SI3/CGI)
+        self.done[-1].wait(15 + 3 * (self.secs + 0.5) * len(self.jobs))
         return self.ok[i]
 
     def stop(self):
@@ -293,7 +297,13 @@ def main():
     sdr = a.sdr
     if sdr == "bladerf" and decoder_pid():
         sdr = "bladerf-dec"
-        print("[gsm] using the open lte_sib_decoder (no new open of the bladeRF)", flush=True)
+        try:  # the daemon's fixed rate is the last field of its .cfg ("... |-r 61.44e6")
+            if float(open(DEC_PREFIX + ".cfg").read().strip().split("|")[-1].split()[-1]) == 61.44e6:
+                sdr = "bladerf-dec-61"
+        except (OSError, ValueError, IndexError):
+            pass
+        print("[gsm] using the open lte_sib_decoder at %.2f MSPS (no new open of the bladeRF)"
+              % (SDRS[sdr]["rate"] / 1e6), flush=True)
     c = SDRS[sdr]
     gains = dict(c["gain"])
     if a.gain_low:
@@ -331,8 +341,8 @@ def main():
 
     t0 = time.time()
     cells = 0
-    if sdr == "bladerf-dec":
-        rec = DecoderRecorder(jobs, files, a.secs, gains, a.ppm)
+    if sdr.startswith("bladerf-dec"):
+        rec = DecoderRecorder(sdr, jobs, files, a.secs, gains, a.ppm)
     else:
         rec = Recorder(sdr, jobs, files, a.secs, gains, a.ppm)
     try:
@@ -341,7 +351,7 @@ def main():
         rec.start()
         for i, (b, fc, arfcns) in enumerate(jobs):
             if not rec.wait(i):
-                if sdr == "bladerf-dec":
+                if sdr.startswith("bladerf-dec"):
                     kill_decoder()
                 print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6), flush=True)
                 print("ERROR: the SDR stopped answering: unplug and replug it (in a VM also re-attach it)", flush=True)

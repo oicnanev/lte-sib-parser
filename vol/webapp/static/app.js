@@ -453,8 +453,8 @@ const form = $("#scan-form");
 // best values measured per SDR (Cisco 4G-LTE-ANTM-D antenna, strong-signal site;
 // with the HackRF's stock antenna gains were 56 / 70)
 const SDR_DEFAULTS = {
-  hackrf: { device: "soapy", device_args: "driver=hackrf", gain: 44, gain_high: 56, t: 30, T: 30, hackrf_low_gain: "24,16", antennas: "1" },
-  bladerf: { device: "bladeRF", device_args: "", gain: 15, gain_high: 40, t: 45, T: 30, hackrf_low_gain: "", antennas: "2" },
+  hackrf: { device: "soapy", device_args: "driver=hackrf", gain: 44, gain_high: 56, t: 30, T: 30, hackrf_low_gain: "24,16", antennas: "1", srate: "30.72" },
+  bladerf: { device: "bladeRF", device_args: "", gain: 15, gain_high: 40, t: 45, T: 30, hackrf_low_gain: "", antennas: "2", srate: "30.72" },
 };
 
 function applySdr(save) {
