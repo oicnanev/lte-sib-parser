@@ -1482,6 +1482,16 @@ Changes in this fork, newest last, with the reason for each.
     instead of 6. Protocol-tested with the stub only; the LTE side at 61.44
     (32x decimation, 246 MB/s over the virtual USB) is untested.
 
+    A/B at the same place (2026-10-07 12:05, same bladeRF, same antennas),
+    the old path (`bladeRF-cli`, 56 MSPS, 1 + 2 captures): 30 cells / 0 with
+    CGI, then 32 / 8; the daemon (30.72 MSPS, 6 captures, decode after
+    recording): 27-31 / 9-11. So the low CGI count of the day is **not** the
+    daemon: the old path gives as few now (the 23-24 of decision 25 were
+    measured on another day, perhaps elsewhere). Also confirmed: the third
+    `bladeRF-cli` open within 25 s dropped the board (reset, reset,
+    disconnect), the same open -> drop pattern as before. `LTE_GSM_KEEP=<dir>`
+    keeps the captures (`gsm_scan.py`) to study the missing SI3 offline.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

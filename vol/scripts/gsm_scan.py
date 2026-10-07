@@ -368,7 +368,13 @@ def main():
             res = gsm_decode.decode_capture(
                 files[i], c["rate"], fc, arfcns, bw=c["bw"], jobs=a.jobs, secs=a.secs,
                 dtype=c["dtype"], full_scale=c["full"], log=lambda m: print("[gsm] " + m, flush=True))
-            os.unlink(files[i])
+            keep = os.environ.get("LTE_GSM_KEEP")  # directory: keep the captures for offline experiments
+            if keep:
+                os.makedirs(keep, exist_ok=True)
+                shutil.move(files[i], os.path.join(keep, "gsm.%s.%d.%.1fMHz.%.2fMSPS.s16.iq" % (
+                    time.strftime("%H%M%S"), i, fc / 1e6, c["rate"] / 1e6)))
+            else:
+                os.unlink(files[i])
             loc = location.current(a.location_file)
             for r in sorted(res, key=lambda r: gsm_decode.arfcn_freq(r["arfcn"])):
                 if r.get("bsic") is None:
