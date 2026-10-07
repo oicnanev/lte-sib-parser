@@ -1394,6 +1394,15 @@ Changes in this fork, newest last, with the reason for each.
     the LTE -> `gsm_scan.py` one), and the next LTE step then ran 37 s with
     0 readings. So the pause is not enough: both drops hit a change between
     `gsm_scan.py`'s `bladeRF-cli` and `lte_sib_decoder`.
+    Measured with `dmesg -w` timestamps against the web app's step starts
+    (4 drops, 2026-10-07): every reset and every disconnect falls on the
+    second a new process starts and opens the bladeRF (`sib-scan.sh`,
+    `gsm_scan.py`); none happens while a process is running or when it closes
+    the device. Roughly 1 open in 4 ends in a disconnect (last one: the first
+    open after the replug survived, the second, the 2G step 3 s after the LTE
+    step, did not). A Run opens the bladeRF twice with "Also 2G", so fewer
+    opens per hour is the way out (one process holding the SDR for several
+    steps/Runs), not longer pauses.
 
 58. **`-K` with the bladeRF: known EARFCNs from wide captures.** Decision 49
     left `-K` decoding one carrier at a time (retune, ~3 s search, SIB wait:
