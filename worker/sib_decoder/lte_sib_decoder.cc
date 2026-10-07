@@ -27,7 +27,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <getopt.h>
+#include <sys/select.h>
+#include <unistd.h>
 #include <set>
 #include <sstream>
 #include <string>
@@ -62,6 +65,8 @@ struct args_t {
   bool        server      = false;
   bool        verbose     = false;
   uint32_t    nof_rx      = 1;   // -A 2: RX1 + RX2 (bladeRF), combined by ue_dl
+  std::string daemon_prefix   = ""; // -D: serve <prefix>.in / <prefix>.out (FIFOs) instead of stdin/stdout
+  double      idle_s          = 600; // -I: daemon exits after this long without a command
 };
 
 static void usage(const char* prog)
@@ -79,14 +84,17 @@ static void usage(const char* prog)
          "  -T S        longest wait for the next SI message (default 6; normally 3 periods of the slowest SI missing)\n"
          "  -l FILE     log file (default stdout, one-carrier mode)\n"
          "  -v          print each cell search attempt\n"
-         "  -A N        receive antennas: 1 (RX1) or 2 (RX1 + RX2, diversity)\n",
+         "  -A N        receive antennas: 1 (RX1) or 2 (RX1 + RX2, diversity)\n"
+         "  -D PREFIX   daemon (implies -s): commands on PREFIX.in, answers on PREFIX.out (FIFOs),\n"
+         "              pid in PREFIX.pid; commands also: hello, quit, rec <file> <hz> <s> <gain>\n"
+         "  -I S        daemon: close the SDR and exit after S seconds without a command (default 600)\n",
          prog, prog);
 }
 
 static void parse_args(args_t& a, int argc, char** argv)
 {
   int opt;
-  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vA:h")) != -1) {
+  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vA:D:I:h")) != -1) {
     switch (opt) {
       case 'e': a.earfcn = atoi(optarg); break;
       case 's': a.server = true; break;
@@ -100,6 +108,8 @@ static void parse_args(args_t& a, int argc, char** argv)
       case 'T': a.si_s = atof(optarg); break;
       case 'l': a.log_file = optarg; break;
       case 'v': a.verbose = true; break;
+      case 'D': a.daemon_prefix = optarg; a.server = true; break;
+      case 'I': a.idle_s = atof(optarg); break;
       case 'A': a.nof_rx = std::min(std::max(atoi(optarg), 1), MAX_RX); break;
       default: usage(argv[0]); exit(opt == 'h' ? 0 : 1);
     }
@@ -1068,10 +1078,67 @@ static void wide_command(rx_t& rx, const args_t& args, const std::string& line)
   printf("wide: %zu carriers decoded from the capture in %.1f s\n", carriers.size(), now_s() - t0);
 }
 
+// "rec <path> <center_hz> <seconds> <gain>": capture and write the samples as
+// int16 I/Q (SC16 Q11, what bladeRF-cli records) for gsm_decoder. Answers
+// "recorded <path>" or "rec failed".
+static void rec_command(rx_t& rx, const std::string& line)
+{
+  std::istringstream in(line);
+  std::string        word, path;
+  double             center = 0, seconds = 0;
+  float              gain   = 0;
+  in >> word >> path >> center >> seconds >> gain;
+  if (path.empty() || center <= 0 || seconds <= 0 || !capture(rx, center, gain, seconds)) {
+    printf("rec failed\n");
+    return;
+  }
+  FILE* f = fopen(path.c_str(), "wb");
+  if (!f) {
+    printf("rec failed\n");
+    return;
+  }
+  std::vector<int16_t> out(2 * (1 << 16));
+  bool                 ok = true;
+  for (uint64_t pos = 0; pos < rx.buf_len && ok; pos += 1 << 16) {
+    uint64_t len = std::min<uint64_t>(1 << 16, rx.buf_len - pos);
+    for (uint64_t k = 0; k < 2 * len; k++) {
+      float v = ((const float*)(rx.buf[0] + pos))[k] * 2048.0f;
+      out[k]  = (int16_t)std::max(-2048.0f, std::min(2047.0f, v));
+    }
+    ok = fwrite(out.data(), sizeof(int16_t), 2 * len, f) == 2 * len;
+  }
+  ok &= fclose(f) == 0;
+  if (ok) {
+    printf("recorded %s\n", path.c_str());
+  } else {
+    printf("rec failed\n");
+  }
+}
+
 int main(int argc, char** argv)
 {
   args_t args;
   parse_args(args, argc, argv);
+  if (!args.daemon_prefix.empty()) {
+    // daemon: commands arrive on <prefix>.in, answers go to <prefix>.out. Both FIFOs are
+    // opened read/write so that clients coming and going never give EOF or SIGPIPE
+    int in_fd  = open((args.daemon_prefix + ".in").c_str(), O_RDWR);
+    int out_fd = open((args.daemon_prefix + ".out").c_str(), O_RDWR);
+    if (in_fd < 0 || out_fd < 0) {
+      fprintf(stderr, "cannot open %s.in / %s.out (mkfifo them first)\n", args.daemon_prefix.c_str(),
+              args.daemon_prefix.c_str());
+      return 1;
+    }
+    dup2(in_fd, 0);
+    dup2(out_fd, 1);
+    setvbuf(stdin, nullptr, _IONBF, 0); // select() on fd 0 must see everything not yet read
+    signal(SIGPIPE, SIG_IGN);
+    FILE* pf = fopen((args.daemon_prefix + ".pid").c_str(), "w");
+    if (pf) {
+      fprintf(pf, "%d\n", (int)getpid());
+      fclose(pf);
+    }
+  }
   setvbuf(stdout, nullptr, _IOLBF, 0); // line by line, also into a pipe
   srslog::init();
   signal(SIGINT, on_signal);
@@ -1097,7 +1164,34 @@ int main(int argc, char** argv)
   int ret = 0;
   if (args.server) {
     char line[8192];
-    while (!go_exit && fgets(line, sizeof(line), stdin)) {
+    while (!go_exit) {
+      if (!args.daemon_prefix.empty()) {
+        fd_set         fds;
+        struct timeval tv = {(time_t)args.idle_s, 0};
+        FD_ZERO(&fds);
+        FD_SET(0, &fds);
+        if (select(1, &fds, nullptr, nullptr, &tv) <= 0) {
+          if (go_exit) {
+            break;
+          }
+          printf("idle for %.0f s: closing the SDR\n", args.idle_s);
+          break;
+        }
+      }
+      if (!fgets(line, sizeof(line), stdin)) {
+        break;
+      }
+      if (strncmp(line, "quit", 4) == 0) {
+        break;
+      }
+      if (strncmp(line, "hello", 5) == 0) { // lets a client discard answers left by a previous one
+        printf("hello\n");
+        continue;
+      }
+      if (strncmp(line, "rec ", 4) == 0) {
+        rec_command(rx, line);
+        continue;
+      }
       if (strncmp(line, "wide ", 5) == 0) {
         wide_command(rx, args, line);
         continue;

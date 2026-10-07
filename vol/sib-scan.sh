@@ -47,6 +47,10 @@ show_help () {
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
           did not decode SIB1 (the cell identity); retries run at the end
           (default: 1 with -K, or -S with numpy; 0 otherwise)
+  -P      with the decoder: keep lte_sib_decoder (and so the SDR) open after
+          this scan, for the next sib-scan.sh / gsm_scan.py. Opening a
+          bladeRF is what makes it drop off a VM's USB bus; the decoder
+          closes it after 10 min without a command
   -Z      with -K and the decoder: group the known EARFCNs in ~23 MHz captures
           (2 s each, decoded from RAM); cells left at the MIB/SIB1 get a live
           decode at the end. Not faster than the default (README 58)
@@ -107,7 +111,77 @@ containsElement () {
 # needs the SDR (the PSS/SSS checks with bladeRF-cli) and reopened afterwards.
 DEC_PID=""
 sdr_fail=0
+DEC_PREFIX=/tmp/lte_decoder
+DEC_ATTACHED=0
+
+# -P: the decoder is a daemon (own session) that outlives this script; commands
+# and answers go through two FIFOs, which gsm_scan.py uses too
+dec_attach () {
+  [[ $DEC_ATTACHED -eq 1 ]] && return 0
+  local cfg="$nof_rx|$device_name|$device_args|${dec_srate[*]}"
+  local pid=""
+  [[ -r $DEC_PREFIX.pid ]] && pid=$(<$DEC_PREFIX.pid)
+  if [[ -n $pid ]] && kill -0 $pid 2>/dev/null && [[ $(cat $DEC_PREFIX.cfg 2>/dev/null) != "$cfg" ]]; then
+    echo "[decoder] settings changed: restarting the persistent decoder"
+    dec_kill
+    pid=""
+  fi
+  if [[ -z $pid ]] || ! kill -0 $pid 2>/dev/null; then
+    rm -f $DEC_PREFIX.in $DEC_PREFIX.out $DEC_PREFIX.pid
+    mkfifo $DEC_PREFIX.in $DEC_PREFIX.out
+    echo "$cfg" > $DEC_PREFIX.cfg
+    setsid lte_sib_decoder -s -D $DEC_PREFIX -A "$nof_rx" -d "$device_name" -a "$device_args" "${dec_srate[@]}" \
+        >>$DEC_PREFIX.log 2>&1 </dev/null &
+    pid=$!
+    echo $pid > $DEC_PREFIX.pid
+    echo "[decoder] started the persistent decoder (pid $pid)"
+  fi
+  # read/write opens never block, even if the daemon is not there yet
+  exec {DEC_R}<>$DEC_PREFIX.out {DEC_W}<>$DEC_PREFIX.in
+  DEC=($DEC_R $DEC_W)
+  echo hello >&$DEC_W
+  local line slow=0
+  while [[ $slow -lt 30 ]]; do
+    if read -r -t 3 -u $DEC_R line; then
+      echo "$line"
+      if [[ $line == hello ]]; then
+        DEC_ATTACHED=1
+        return 0
+      fi
+    else
+      kill -0 $pid 2>/dev/null || break
+      slow=$((slow+1))
+    fi
+  done
+  echo "the persistent decoder did not answer"
+  dec_kill
+  return 1
+}
+dec_detach () {
+  [[ $DEC_ATTACHED -eq 0 ]] && return
+  eval "exec ${DEC[0]}<&- ${DEC[1]}>&-" 2>/dev/null
+  DEC_ATTACHED=0
+}
+# close the SDR for good (it vanished, or another tool needs it)
+dec_kill () {
+  local pid=""
+  [[ -r $DEC_PREFIX.pid ]] && pid=$(<$DEC_PREFIX.pid)
+  if [[ -n $pid ]] && kill -0 $pid 2>/dev/null; then
+    [[ $DEC_ATTACHED -eq 1 ]] && echo quit >&"${DEC[1]}" 2>/dev/null
+    for _ in $(seq 20); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
+    kill -INT $pid 2>/dev/null
+    for _ in $(seq 10); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
+    kill -9 $pid 2>/dev/null
+  fi
+  dec_detach
+  rm -f $DEC_PREFIX.in $DEC_PREFIX.out $DEC_PREFIX.pid $DEC_PREFIX.cfg
+}
+# stop using the SDR: with -P only let go of it unless it is lost
+dec_abort () {
+  if [[ $keep_decoder -eq 1 ]]; then dec_kill; else dec_stop; fi
+}
 dec_start () {
+  [[ $keep_decoder -eq 1 ]] && { dec_attach; return; }
   [[ -n $DEC_PID ]] && kill -0 $DEC_PID 2>/dev/null && return 0
   coproc DEC { exec lte_sib_decoder -s -A "$nof_rx" -d "$device_name" -a "$device_args" "${dec_srate[@]}" 2>&1; }
   DEC_PID=$DEC_PID
@@ -122,6 +196,7 @@ dec_start () {
   return 1
 }
 dec_stop () {
+  [[ $keep_decoder -eq 1 ]] && { dec_detach; return; }
   [[ -z $DEC_PID ]] && return
   local pid=$DEC_PID
   eval "exec ${DEC[1]}>&-" 2>/dev/null  # EOF on its stdin: it closes the SDR and exits
@@ -192,11 +267,12 @@ declare -A tries
 skip_wide=(--skip-wide)
 no_requrse=0
 wide_known=0
+keep_decoder=0
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUZA:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUZPA:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -236,6 +312,8 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUZA:?" opt; do
       ;;
     Z)  wide_known=1
         ;;
+    P)  keep_decoder=1
+        ;;
     n)  no_requrse=1
       ;;
     t)  srsue_timeout=$OPTARG
@@ -272,6 +350,14 @@ if [[ $use_decoder -eq 1 ]] && ! lte_sib_decoder -h 2>&1 | grep -q -- "^ *-A "; 
   echo "WARNING: lte_sib_decoder in the image is older than the scripts (no -A):"
   echo "WARNING: rebuild it (docker compose build) and restart the web app; using srsue"
   use_decoder=0
+fi
+if [[ $keep_decoder -eq 1 ]]; then
+  if [[ $use_decoder -ne 1 ]]; then
+    keep_decoder=0
+  elif ! lte_sib_decoder -h 2>&1 | grep -q -- "^ *-D "; then
+    echo "WARNING: lte_sib_decoder in the image has no daemon mode (-D): rebuild the image; not keeping it open"
+    keep_decoder=0
+  fi
 fi
 # bladeRF + decoder: the decoder's own cell search replaces the PSS/SSS
 # pre-check of -K (bladeRF-cli captures, ~75 s for the Portugal list, which
@@ -531,7 +617,7 @@ while true; do
               if [[ $sdr_fail -ge 3 ]]; then
                 echo "ERROR: the SDR stopped answering (USB errors on $sdr_fail carriers in a row)."
                 echo "ERROR: unplug and replug it (in a VM also re-attach it), then run again."
-                dec_stop
+                dec_abort
                 exit 3
               fi
             else
@@ -650,7 +736,7 @@ while true; do
               if [[ $sdr_fail -ge 3 ]]; then
                 echo "ERROR: the SDR stopped answering (3 captures in a row failed)."
                 echo "ERROR: unplug and replug it (in a VM also re-attach it), then run again."
-                dec_stop
+                dec_abort
                 exit 3
               fi
             done < <(python3 $PY_PATH/known_chunks.py -r "${dec_srate[1]:-30.72e6}" $known_list)
@@ -715,7 +801,7 @@ while true; do
             continue ;;
 
         "check_known")
-            dec_stop  # the checks capture with bladeRF-cli, which needs the SDR
+            dec_abort  # the checks capture with bladeRF-cli, which needs the SDR
             echo "checking EARFCNs for cells: ${earfcn_to_check[*]}"
             check_sdr=(--sdr hackrf)
             if [[ ${device_name,,} == "bladerf" || ${device_args,,} == *driver=bladerf* ]]; then

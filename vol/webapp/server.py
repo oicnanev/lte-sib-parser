@@ -660,10 +660,11 @@ def earfcn_table(filename="portugal.txt"):
 
 
 def antenna_args(p):
-    """-A 2: bladeRF RX1 + RX2 for lte_sib_decoder"""
-    if p.get("device") == "bladeRF" and str(p.get("antennas", "1")) == "2":
-        return ["-A", "2"]
-    return []
+    """bladeRF + lte_sib_decoder: -P (the decoder keeps the board open between steps and runs:
+    opening it is what drops it off a VM's USB bus) and -A 2 (RX1 + RX2)"""
+    if p.get("device") != "bladeRF":
+        return []
+    return ["-P"] + (["-A", "2"] if str(p.get("antennas", "1")) == "2" else [])
 
 
 def known_job(p, filename):

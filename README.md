@@ -1424,6 +1424,33 @@ Changes in this fork, newest last, with the reason for each.
     gain, so it is **off by default**: `-Z` enables it. The live decoder
     already is the fast path; the time is the SI wait, not the retune.
 
+59. **Persistent decoder: the bladeRF is opened once, not once per step.**
+    Decision 57's measurements: every USB reset/disconnect of the bladeRF in
+    the VM falls on a process opening the board. `sib-scan.sh -P` (the web
+    app passes it for the bladeRF) starts `lte_sib_decoder -s -D /tmp/lte_decoder`
+    in its own session instead of as a child: commands go in through
+    `/tmp/lte_decoder.in`, answers come out of `.out` (FIFOs opened read/write
+    by the daemon, so clients come and go), `.pid` and `.cfg` (antennas,
+    device, rate) say whether the running one can be reused; with other
+    settings it is restarted. Each client sends `hello` first and discards
+    everything up to the answer, so lines left by an interrupted client never
+    reach the next. The decoder closes the SDR after 10 min without a command
+    (`-I`), and `sib-scan.sh` kills it when the SDR stops answering (a replug
+    needs a fresh open). While it is open, nothing else can use the board
+    (`bladeRF-cli`, the old 2G path): wait 10 min or `kill $(cat /tmp/lte_decoder.pid)`.
+    2G goes through it too: `gsm_scan.py --sdr bladerf` detects the daemon
+    and uses its new `rec <file> <hz> <s> <gain>` command (captures written
+    as int16 I/Q like `bladeRF-cli`, so `gsm_decoder` is unchanged). The
+    daemon runs at its fixed 30.72 MSPS (23 MHz usable), so GSM-900 takes 2
+    captures and DCS-1800 4 instead of 1 and 2 at 56 MSPS: ~3 s more of
+    capture, against ~2 s saved by not opening `bladeRF-cli`, and no extra
+    opens. Without a daemon `gsm_scan.py` behaves as before. A Run with
+    "Also 2G" now opens the bladeRF once per 10 minutes of activity instead
+    of twice per Run. Tested with the `file` RF device and a protocol stub
+    only; **not yet with the real bladeRF**: compare the Run time and the
+    cells found with decision 53/54's numbers, and count the resets in
+    `usb-events.log`.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

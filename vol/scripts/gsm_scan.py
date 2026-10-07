@@ -9,11 +9,16 @@ CGI MCC-MNC-LAC-CI, system information as JSON in gsm).
 
 bladeRF: 56 MSPS, 50 MHz analog bandwidth: GSM-900 in one capture, DCS-1800 in
 two, all recorded in one bladeRF-cli session. HackRF: 20 MSPS, 3 + 5 captures.
+With a persistent lte_sib_decoder running (sib-scan.sh -P) the bladeRF is not
+opened again: the decoder records at its 30.72 MSPS (23 MHz usable: 2 + 4
+captures), which avoids the USB resets that opening the board causes in a VM.
 Each capture is 1.2 s (every SI3 slot of the 51-multiframe cycle comes at
 least once), decoded by gsm_decoder (C++) while the next ones are recorded.
 """
 import argparse
 import json
+import select
+import threading
 import math
 import os
 import shutil
@@ -36,9 +41,26 @@ BANDS = {900: ("GSM900", gsm_decode.band_arfcns(900)), 1800: ("DCS1800", gsm_dec
 # 40 clipped at 1.8 GHz next to strong LTE carriers, 30 did not
 SDRS = {
     "bladerf": {"rate": 56e6, "bw": 50e6, "dtype": np.int16, "full": 2048, "gain": {900: "15", 1800: "30"}},
+    # same board through the open lte_sib_decoder: its fixed rate, no new open
+    "bladerf-dec": {"rate": 30.72e6, "bw": 23e6, "dtype": np.int16, "full": 2048, "gain": {900: "15", 1800: "30"}},
     "hackrf": {"rate": 20e6, "bw": 15e6, "dtype": np.int8, "full": 128,
                "gain": {900: os.environ.get("LTE_HACKRF_LOW_GAIN") or "24,16", 1800: "32,20"}},
 }
+
+
+DEC_PREFIX = "/tmp/lte_decoder"  # FIFOs of sib-scan.sh -P (lte_sib_decoder -D)
+
+
+def decoder_pid():
+    """pid of the persistent lte_sib_decoder, or None"""
+    try:
+        pid = int(open(DEC_PREFIX + ".pid").read())
+        os.kill(pid, 0)
+        os.stat(DEC_PREFIX + ".in")
+        os.stat(DEC_PREFIX + ".out")
+        return pid
+    except (OSError, ValueError):
+        return None
 
 
 def plan(band, sdr):
@@ -140,6 +162,89 @@ class Recorder:
                 self.proc.wait()
 
 
+class DecoderRecorder:
+    """same interface as Recorder, the captures recorded by the open
+    lte_sib_decoder ("rec" commands over its FIFOs), one after the other while
+    the earlier ones are decoded"""
+
+    def __init__(self, jobs, files, secs, gains, ppm):
+        self.jobs, self.files, self.gains, self.ppm, self.secs = jobs, files, gains, ppm, secs
+        self.c = SDRS["bladerf-dec"]
+        self.ok = [False] * len(jobs)
+        self.done = [threading.Event() for _ in jobs]
+        self.fin = self.fout = None
+        self.thread = None
+
+    def _line(self, timeout):
+        buf = b""
+        end = time.time() + timeout
+        while not buf.endswith(b"\n"):
+            left = end - time.time()
+            if left <= 0 or not select.select([self.fout], [], [], left)[0]:
+                return None
+            ch = os.read(self.fout, 1)
+            if not ch:
+                return None
+            buf += ch
+        return buf.decode(errors="replace").strip()
+
+    def _run(self):
+        try:
+            self.fin = os.open(DEC_PREFIX + ".in", os.O_RDWR)
+            self.fout = os.open(DEC_PREFIX + ".out", os.O_RDWR)
+            # discard what a previous client left, up to our hello
+            os.write(self.fin, b"hello\n")
+            while True:
+                line = self._line(120)
+                if line is None:
+                    return
+                if line == "hello":
+                    break
+            for i, (band, fc, _) in enumerate(self.jobs):
+                tuned = int(round(fc * (1 + self.ppm / 1e6)))
+                os.write(self.fin, ("rec %s %d %.3f %s\n" % (self.files[i], tuned, self.secs + 0.05,
+                                                              self.gains[band])).encode())
+                while True:
+                    line = self._line(60)
+                    if line is None or line == "rec failed":
+                        return
+                    if line.startswith("recorded"):
+                        break
+                self.ok[i] = True
+                self.done[i].set()
+        except OSError:
+            pass
+        finally:
+            for e in self.done:
+                e.set()   # a failed capture must not leave wait() hanging
+
+    def start(self):
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def wait(self, i):
+        self.done[i].wait(15 + 3 * (self.secs + 0.5) * (i + 1))
+        return self.ok[i]
+
+    def stop(self):
+        pass
+
+
+def kill_decoder():
+    """the SDR does not answer: close the decoder so that a replugged board can be opened again"""
+    pid = decoder_pid()
+    if pid:
+        try:
+            os.kill(pid, signal.SIGINT)
+        except OSError:
+            pass
+    for ext in (".in", ".out", ".pid", ".cfg"):
+        try:
+            os.unlink(DEC_PREFIX + ext)
+        except OSError:
+            pass
+
+
 def clipping(path, sdr):
     c = SDRS[sdr]
     raw = np.memmap(path, dtype=c["dtype"], mode="r")
@@ -185,7 +290,11 @@ def main():
     p.add_argument("--secs", type=float, default=1.2)
     p.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
     a = p.parse_args()
-    c = SDRS[a.sdr]
+    sdr = a.sdr
+    if sdr == "bladerf" and decoder_pid():
+        sdr = "bladerf-dec"
+        print("[gsm] using the open lte_sib_decoder (no new open of the bladeRF)", flush=True)
+    c = SDRS[sdr]
     gains = dict(c["gain"])
     if a.gain_low:
         gains[900] = a.gain_low
@@ -199,7 +308,7 @@ def main():
     scan_id = readings_db.new_scan(conn, None, a.ppm or None, args)
     print("scan id: %d" % scan_id, flush=True)
 
-    jobs = [(b, fc, arfcns) for b in a.bands for fc, arfcns in plan(b, a.sdr)]
+    jobs = [(b, fc, arfcns) for b in a.bands for fc, arfcns in plan(b, sdr)]
     size = int(c["rate"] * (a.secs + 0.05)) * 2 * np.dtype(c["dtype"]).itemsize
     d = tmp_dir((len(jobs) + 1) * size)   # a bladeRF records every capture while the first is decoded
     files = [os.path.join(d, "gsm.%d.%d.iq" % (os.getpid(), i)) for i in range(len(jobs))]
@@ -222,17 +331,22 @@ def main():
 
     t0 = time.time()
     cells = 0
-    rec = Recorder(a.sdr, jobs, files, a.secs, gains, a.ppm)
+    if sdr == "bladerf-dec":
+        rec = DecoderRecorder(jobs, files, a.secs, gains, a.ppm)
+    else:
+        rec = Recorder(sdr, jobs, files, a.secs, gains, a.ppm)
     try:
         print("task: gsm_capture", flush=True)
         print("[gsm] capturing %s MHz" % ", ".join("%.1f" % (fc / 1e6) for _, fc, _ in jobs), flush=True)
         rec.start()
         for i, (b, fc, arfcns) in enumerate(jobs):
             if not rec.wait(i):
+                if sdr == "bladerf-dec":
+                    kill_decoder()
                 print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6), flush=True)
                 print("ERROR: the SDR stopped answering: unplug and replug it (in a VM also re-attach it)", flush=True)
                 return 3
-            clip = clipping(files[i], a.sdr)
+            clip = clipping(files[i], sdr)
             if clip > 0.002:
                 print("[gsm] %.1f%% of the samples clipped at %.1f MHz: lower the gain" % (100 * clip, fc / 1e6),
                       flush=True)
