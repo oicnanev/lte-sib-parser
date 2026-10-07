@@ -1406,9 +1406,14 @@ Changes in this fork, newest last, with the reason for each.
     are decoded live; cells left at the MIB or SIB1 get a live decode at the
     end (as in decision 49); a carrier with no cell (`nocell`) is not retried.
     3 groups in a row with no readable carrier exit with code 3 (SDR lost).
-    `-N` returns to one carrier at a time. Not measured yet (the bladeRF had
-    left the VM's USB bus when this was written): compare the Portugal preset
-    time and cells found with `-N`.
+    Measured (VM, bladeRF, Portugal preset, 22 EARFCNs): the captures
+    themselves take ~38 s for the 10 groups (2.2 s each plus decoding), but
+    only 5 of 14 cells came out with all SIBs; the other 9 stopped at the MIB
+    or SIB1 (a 2 s capture allows one timing lock, and SIBs with long periods
+    do not fit) and went to the live decode at the end, ~6 s each. Two runs:
+    1:06 and 1:32, against 1:02-1:17 one carrier at a time, same 15 cells. No
+    gain, so it is **off by default**: `-Z` enables it. The live decoder
+    already is the fast path; the time is the SI wait, not the retune.
 
 ### Known limitations
 

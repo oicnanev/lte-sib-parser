@@ -47,9 +47,9 @@ show_help () {
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
           did not decode SIB1 (the cell identity); retries run at the end
           (default: 1 with -K, or -S with numpy; 0 otherwise)
-  -N      with -K and the decoder: one carrier at a time (default: the known
-          EARFCNs are grouped in ~23 MHz captures, 2 s each, decoded from RAM;
-          cells left at the MIB/SIB1 get a live decode at the end)
+  -Z      with -K and the decoder: group the known EARFCNs in ~23 MHz captures
+          (2 s each, decoded from RAM); cells left at the MIB/SIB1 get a live
+          decode at the end. Not faster than the default (README 58)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -191,12 +191,12 @@ retry_queue=()
 declare -A tries
 skip_wide=(--skip-wide)
 no_requrse=0
-wide_known=1
+wide_known=0
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUNA:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUZA:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -234,7 +234,7 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUNA:?" opt; do
       ;;
     y)  retries=$OPTARG
       ;;
-    N)  wide_known=0
+    Z)  wide_known=1
         ;;
     n)  no_requrse=1
       ;;
