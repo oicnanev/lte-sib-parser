@@ -81,7 +81,7 @@
           <select name="antennas"><option value="1">1 (RX1)</option><option value="2">2 (RX1 + RX2)</option></select>
         </label>
         <label class="for-bladerf" title="Sample rate the bladeRF stays at for the whole session. 61.44 MSPS (test): 2G needs 3 captures instead of 6 (~7 s instead of ~14 s), LTE decodes from a 32x decimation; heavier on CPU and on the (virtual) USB">bladeRF sample rate
-          <select name="srate"><option value="30.72">30.72 MSPS</option><option value="61.44">61.44 MSPS (test)</option></select>
+          <select name="srate"><option value="30.72">30.72 MSPS</option><option value="61.44">61.44 MSPS (test, slower)</option></select>
         </label>
         <label class="for-hackrf" title="HackRF lna,vga for the PSS/SSS captures below 1 GHz; 24,16 with a Cisco LTE antenna (32,20 overloaded it), empty = 32,20">Capture gain &lt; 1 GHz (HackRF)
           <input name="hackrf_low_gain" placeholder="lna,vga e.g. 24,16">

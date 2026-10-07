@@ -1530,6 +1530,17 @@ Changes in this fork, newest last, with the reason for each.
     episodes), and warns when the daemon has two antennas. Open: LTE with two
     antennas would need the stream to switch to RX_X1 for the 2G captures.
 
+    **61.44 MSPS session, measured (2026-10-07, 1 antenna, same place):**
+    30 min / 23 runs against 95 min / 54 runs at 30.72 MSPS. LTE step median
+    **71 s** (30.72: 58 s), same 15-16 cells per step; 2G step median 11 s
+    (30.72: 12 s; 3 captures instead of 6, but each twice the data), same ~33
+    cells but **20 CGI on average (2 to 31) against 28.8 (20 to 36)**: 4 runs
+    with 2-5 CGI, the same lost samples as with two antennas (61.44 MSPS x 1
+    channel is also 246 MB/s). Daemon RSS 720 MB (430), CPU 47 % (28 %). A
+    full run takes ~85 s instead of ~70 s. Not worth it: 30.72 MSPS stays the
+    default (the web app labels 61.44 as a test). Changing the rate also
+    reopens the board, which dropped it once (the first open after the switch).
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).
