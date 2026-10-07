@@ -211,6 +211,8 @@ class DecoderRecorder:
                         return
                     if line.startswith("recorded"):
                         break
+                    if line and not line.startswith("captured"):
+                        print("[gsm] decoder: " + line[:160], flush=True)  # libbladeRF overruns etc.
                 self.ok[i] = True
                 self.done[i].set()
         except OSError:
