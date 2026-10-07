@@ -1371,6 +1371,11 @@ Changes in this fork, newest last, with the reason for each.
     A bus-powered bladeRF needs a port (or a powered hub) of its own: the
     bladeRF 2.0 micro draws up to ~900 mA, and a second device on the same
     port can brown it out when it tunes above ~1 GHz at high gain.
+    In a VM (UTM/QEMU) the bladeRF can also drop off the virtual USB bus even
+    on its own port: `gsm_scan.py` now stops its `bladeRF-cli` with SIGINT
+    (kill -9 only after 8 s) because killing it makes QEMU lose the device.
+    If it still happens after a run, disable USB autosuspend in the VM
+    (`usbcore.autosuspend=-1`) and check `sudo dmesg` for the `xhci` message.
 
 ### Known limitations
 

@@ -131,8 +131,13 @@ class Recorder:
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
-            self.proc.kill()
-            self.proc.wait()
+            # SIGINT lets bladeRF-cli close the device; kill -9 makes QEMU drop it
+            self.proc.send_signal(signal.SIGINT)
+            try:
+                self.proc.wait(8)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
 
 
 def clipping(path, sdr):
