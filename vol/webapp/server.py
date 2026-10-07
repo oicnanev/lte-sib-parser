@@ -339,6 +339,7 @@ STATUS_RES = [
 NOISE = re.compile(r"^\s*$|^\.+$|^(earfcn|start_earfcn|scanned earfcns|queue to scan earfcn)")
 
 
+STEP_GAP_S = 2  # pause between steps: the SDR is closed and reopened by another process
 SDR_LOST = 3  # exit code of sib-scan.sh / gsm_scan.py when the SDR stopped answering
 
 
@@ -428,6 +429,8 @@ def run_steps(steps, ppm, env=None):
                     if r[0] is not None]
         hub.add_log("[webapp] band %s finished (exit code %s)" % (band, code) if band
                     else "[webapp] scan finished (exit code %s)" % code)
+        if i + 1 < len(steps) and code != SDR_LOST and not hub.stop_requested:
+            time.sleep(STEP_GAP_S)
         # calibrate once, on the lowest band, and reuse it: calibration on high
         # bands is ambiguous for large clock errors
         if ppm == "auto" and hub.status.get("ppm") is not None:

@@ -1376,6 +1376,16 @@ Changes in this fork, newest last, with the reason for each.
     (kill -9 only after 8 s) because killing it makes QEMU lose the device.
     If it still happens after a run, disable USB autosuspend in the VM
     (`usbcore.autosuspend=-1`) and check `sudo dmesg` for the `xhci` message.
+    Analysis of a drop (2026-10-07, `dmesg` against the `scans` table, VM
+    clock vs UTC): every `usb 4-3: reset SuperSpeed USB device` fell on the
+    exact second a process opened or closed the bladeRF (end of
+    `lte_sib_decoder`, start of `gsm_scan.py`, ...), and after 2-5 such resets
+    the device disconnected (`USB disconnect`), the last time right as the
+    final LTE step ended. Nothing else on the bus was involved (the u-blox GPS
+    is on another controller). The bladeRF sat on the emulated NEC uPD720200
+    xHCI (`lspci` in the VM), not on `qemu-xhci`. So the web app now waits
+    `STEP_GAP_S` (2 s) between steps, to cut the open/close churn; whether
+    that is enough is still to be confirmed over several Runs.
 
 ### Known limitations
 
