@@ -725,6 +725,29 @@ Aim for an MIB SNR of roughly 8 dB or more and all SIBs within ~15 s, then
 put the values in the web app's form (or edit `SDR_DEFAULTS` in
 `vol/webapp/static/app.js` to make them the defaults).
 
+### Driving: checklist (bladeRF in a VM)
+
+Measured on 2026-10-07 (VM, bladeRF, Portugal preset + "Also 2G" + Repeat):
+~72 s per run (LTE ~58 s, 16 cells; 2G ~12 s, ~32 cells, ~28 with CGI), ~50
+runs per hour, one open of the board, daemon memory flat at ~430 MB.
+
+- Web app: SDR *bladeRF*, preset *Portugal (known EARFCNs, fast)*, tick *Also
+  2G* and *Repeat until Stop*. With 2G the bladeRF runs with **one antenna
+  (RX1)**: two antennas (245 MB/s) lose samples and most 2G cells come
+  without CGI (decision 59). Keep the sample rate at 30.72 MSPS.
+- USB: the bladeRF on a port of its own (USB 3, no hub shared with the GPS);
+  the GPS puck on a USB 2 extension away from it (decision 57, GPS section).
+- Before leaving: `sudo dmesg -w --time-format iso | grep --line-buffered -E
+  "usb 4-|xhci" >> vol/output/usb-events.log` in a terminal of the VM (to see
+  resets and drops afterwards); check *Location* shows the GPS source.
+- If the board stops answering the run reopens it by itself (up to 2 times
+  per run, 3 runs in a row); only then it stops with "SDR lost". After a USB
+  disconnect (`lsusb` no longer lists it) re-attach it in UTM and start the run
+  again; the daemon closes the SDR 10 min after the last run
+  (`kill $(cat /tmp/lte_decoder.pid)` inside the container to do it now).
+- Afterwards: `vol/output/usb-events.log` (resets, disconnects) against the
+  scans table (`/api/scans`: duration and readings per step).
+
 ## LimeSDR usage
 
 For LimeSDR devices use `-d soapy` to avoid a long search for UHD devices:
