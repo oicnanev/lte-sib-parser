@@ -1382,8 +1382,11 @@ Changes in this fork, newest last, with the reason for each.
     `lte_sib_decoder`, start of `gsm_scan.py`, ...), and after 2-5 such resets
     the device disconnected (`USB disconnect`), the last time right as the
     final LTE step ended. Nothing else on the bus was involved (the u-blox GPS
-    is on another controller). The bladeRF sat on the emulated NEC uPD720200
-    xHCI (`lspci` in the VM), not on `qemu-xhci`. So the web app now waits
+    is on another controller). The bladeRF is already on `qemu-xhci`
+    (`usb3`/`usb4` are PCI 00:05.0; the NEC xHCI, 00:04.0, only has the
+    keyboard/mouse/tablet), passed through by UTM's SPICE `usb-redir`, so
+    changing the controller will not help; the resets come from usbredir.
+    The web app now waits
     `STEP_GAP_S` (2 s) between steps, to cut the open/close churn; whether
     that is enough is still to be confirmed over several Runs.
 
