@@ -1395,6 +1395,21 @@ Changes in this fork, newest last, with the reason for each.
     0 readings. So the pause is not enough: both drops hit a change between
     `gsm_scan.py`'s `bladeRF-cli` and `lte_sib_decoder`.
 
+58. **`-K` with the bladeRF: known EARFCNs from wide captures.** Decision 49
+    left `-K` decoding one carrier at a time (retune, ~3 s search, SIB wait:
+    ~73 s for the 22 EARFCNs of the Portugal preset). With the decoder's
+    `wide` command, `sib-scan.sh -K` now groups the list with
+    `scripts/known_chunks.py` into captures of up to ~23 MHz (same usable
+    width as `wide_chunks.py`; groups never straddle 1 GHz because the gain
+    differs), captures 2 s per group and decodes every carrier from RAM: the
+    Portugal list is 10 captures. EARFCNs the capture could not read (`error`)
+    are decoded live; cells left at the MIB or SIB1 get a live decode at the
+    end (as in decision 49); a carrier with no cell (`nocell`) is not retried.
+    3 groups in a row with no readable carrier exit with code 3 (SDR lost).
+    `-N` returns to one carrier at a time. Not measured yet (the bladeRF had
+    left the VM's USB bus when this was written): compare the Portugal preset
+    time and cells found with `-N`.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

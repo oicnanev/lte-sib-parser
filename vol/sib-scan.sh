@@ -47,6 +47,9 @@ show_help () {
   -y      srsue retries for EARFCNs where PSS/SSS confirmed a cell but srsue
           did not decode SIB1 (the cell identity); retries run at the end
           (default: 1 with -K, or -S with numpy; 0 otherwise)
+  -N      with -K and the decoder: one carrier at a time (default: the known
+          EARFCNs are grouped in ~23 MHz captures, 2 s each, decoded from RAM;
+          cells left at the MIB/SIB1 get a live decode at the end)
   -q      use explict list of earfcn's (avoid cell_search)
           example: -q \"1300 1301 1302 1303\"
   -n      no reqursive scan, do no scan cells from sib5
@@ -188,11 +191,12 @@ retry_queue=()
 declare -A tries
 skip_wide=(--skip-wide)
 no_requrse=0
+wide_known=1
 
 earfcn_need_scan=()
 earfcn_scanned=()
 
-while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUA:?" opt; do
+while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUNA:?" opt; do
   case "$opt" in
     h|\?)
       show_help
@@ -230,6 +234,8 @@ while getopts "s:e:b:a:d:g:G:r:p:t:T:hq:K:W:Swx:y:nD:R:L:XUA:?" opt; do
       ;;
     y)  retries=$OPTARG
       ;;
+    N)  wide_known=0
+        ;;
     n)  no_requrse=1
       ;;
     t)  srsue_timeout=$OPTARG
@@ -325,6 +331,10 @@ if [[ -n $known_list && $direct_known -eq 1 ]]; then
   earfcn_need_scan=($known_list)
   earfcn_checked=($known_list)
   initial_task="choose_earfcn_for_srsue"
+  if [[ $wide_known -eq 1 ]]; then
+    earfcn_need_scan=()
+    initial_task="wide_known"
+  fi
   do_cellsearch=0
   if [[ $ppm == "auto" ]]; then
     ppm=0
@@ -587,6 +597,75 @@ while true; do
                     fi
             done
             # if there is new earfcn's in earfcn_need_scan, "choose_earfcn_for_srsue" will find it
+            task="choose_earfcn_for_srsue"
+            continue ;;
+
+        "wide_known")
+            dec_start || exit 1
+            found=()
+            while read -r centre group; do
+              gain=$rx_gain
+              if [[ -n $rx_gain_high && $centre -ge 1000000000 ]]; then
+                gain=$rx_gain_high
+              fi
+              cmd="wide $centre 2 $gain"
+              for e in $group; do
+                f=$(python3 $PY_PATH/earfcn_to_freq.py $e)
+                cmd+=" $e $(python3 -c "print(round($f * $ppm * 1e-6))") /tmp/wide.$$.$e.log"
+              done
+              echo "[decoder] capture at $(( centre / 1000 )) kHz for EARFCN $group"
+              echo "$cmd" >&"${DEC[1]}"
+              n_err=0
+              n_done=0
+              while read -r -t 300 -u "${DEC[0]}" line; do
+                echo "$line"
+                if [[ $line =~ ^done\ ([0-9]+)\ ([a-z0-9]+) ]]; then
+                  e=${BASH_REMATCH[1]}
+                  st=${BASH_REMATCH[2]}
+                  n_done=$((n_done+1))
+                  if [[ $st == error ]]; then
+                    n_err=$((n_err+1))
+                    # not read from the capture: decode it live
+                    earfcn_need_scan+=($e)
+                  else
+                    dec_save "$e" "/tmp/wide.$$.$e.log"
+                    earfcn_scanned+=($e)
+                    found+=($e)
+                    if [[ $st == mib || $st == sib1 ]] && [[ $retries -gt 0 ]]; then
+                      echo "$e: $st only from the capture, will decode it live at the end"
+                      tries[$e]=1
+                      retry_queue+=($e)
+                    fi
+                  fi
+                  rm -f "/tmp/wide.$$.$e.log"
+                fi
+                [[ $line == wide:* ]] && break
+              done
+              # captures failing in a row: the SDR left the USB bus (see "srsue" task)
+              if [[ $n_done -eq 0 || $n_err -eq $n_done ]]; then
+                sdr_fail=$((sdr_fail+1))
+              else
+                sdr_fail=0
+              fi
+              if [[ $sdr_fail -ge 3 ]]; then
+                echo "ERROR: the SDR stopped answering (3 captures in a row failed)."
+                echo "ERROR: unplug and replug it (in a VM also re-attach it), then run again."
+                dec_stop
+                exit 3
+              fi
+            done < <(python3 $PY_PATH/known_chunks.py -r "${dec_srate[1]:-30.72e6}" $known_list)
+            # SIB5 neighbours of the cells found: decoded one by one
+            if [[ $no_requrse -eq 0 ]]; then
+              for f in "${found[@]}"; do
+                for e in $(python3 $PY_PATH/get_neigh.py -d "$database" -e "$f" 2>/dev/null); do
+                  if ! containsElement $e "${earfcn_checked[@]}"; then
+                    echo "SIB5 of $f advertises $e: will decode it"
+                    earfcn_checked+=($e)
+                    containsElement $e "${earfcn_scanned[@]}" || earfcn_need_scan+=($e)
+                  fi
+                done
+              done
+            fi
             task="choose_earfcn_for_srsue"
             continue ;;
 
