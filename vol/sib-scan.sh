@@ -111,6 +111,8 @@ containsElement () {
 # needs the SDR (the PSS/SSS checks with bladeRF-cli) and reopened afterwards.
 DEC_PID=""
 sdr_fail=0
+sdr_failed=()
+sdr_reopen=0
 DEC_PREFIX=/tmp/lte_decoder
 DEC_ATTACHED=0
 
@@ -611,10 +613,33 @@ while true; do
               # carrier then fails after minutes of timeouts, so stop after 3 in a row
               if [[ $sdr_err -eq 1 ]] && ! python3 $PY_PATH/has_mib.py -R "$readings_database" -I "$scan_id" "$earfcn"; then
                 sdr_fail=$((sdr_fail+1))
+                sdr_failed+=($earfcn)
               else
                 sdr_fail=0
+                sdr_failed=()
+                [[ $sdr_err -eq 0 ]] && sdr_reopen=0
               fi
               if [[ $sdr_fail -ge 3 ]]; then
+                if [[ $keep_decoder -eq 1 && $sdr_reopen -lt 2 ]]; then
+                  # still on the USB bus but not answering (transfer / NIOS II timeouts):
+                  # closing and opening it again often brings it back; no replug needed
+                  sdr_reopen=$((sdr_reopen+1))
+                  echo "[sdr] USB errors on $sdr_fail carriers in a row: reopening the SDR ($sdr_reopen/2)"
+                  dec_kill
+                  sleep 3
+                  if dec_attach; then
+                    for e in "${sdr_failed[@]}"; do
+                      keep=()
+                      for x in "${earfcn_scanned[@]}"; do [[ $x != "$e" ]] && keep+=($x); done
+                      earfcn_scanned=("${keep[@]}")
+                      earfcn_need_scan+=($e)
+                    done
+                    sdr_fail=0
+                    sdr_failed=()
+                    task="choose_earfcn_for_srsue"
+                    continue
+                  fi
+                fi
                 echo "ERROR: the SDR stopped answering (USB errors on $sdr_fail carriers in a row)."
                 echo "ERROR: unplug and replug it (in a VM also re-attach it), then run again."
                 dec_abort

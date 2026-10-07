@@ -1451,6 +1451,21 @@ Changes in this fork, newest last, with the reason for each.
     cells found with decision 53/54's numbers, and count the resets in
     `usb-events.log`.
 
+    First real test (2026-10-07, VM, "Also 2G" + Repeat): **31 runs in 45
+    minutes with a single open** (one reset in `usb-events.log`, no
+    disconnect), median 69 s LTE (16 cells) + 13 s 2G (30 cells; 8 s before,
+    the extra captures at 30.72 MSPS). Then the board stayed on the USB bus
+    but stopped answering (libbladeRF "Transfer timed out", "NIOS II ...
+    timed out", "Read/Write Error -5", no xhci message): three carriers came
+    back `nocell`, the 2G capture failed, exit 3, repeat stopped. Two gaps:
+    the daemon's stderr went to its log file, so `sib-scan.sh` never saw the
+    USB errors (now `dup2`'d to the FIFO, as the old coprocess had it with
+    `2>&1`), and exit 3 ended the repeat for good. Now, after 3 carriers with
+    USB errors and no MIB, `sib-scan.sh -P` closes and reopens the SDR (2
+    times, those carriers are queued again) and the web app opens it again
+    in the next run after 10 s (3 runs in a row with exit 3 before it gives
+    up). Whether a reopen revives a board in that state is not known yet.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

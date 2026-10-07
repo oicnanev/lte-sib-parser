@@ -340,6 +340,8 @@ NOISE = re.compile(r"^\s*$|^\.+$|^(earfcn|start_earfcn|scanned earfcns|queue to 
 
 
 STEP_GAP_S = 2  # pause between steps: the SDR is closed and reopened by another process
+SDR_LOST_TRIES = 3  # runs in a row ending with SDR_LOST before "repeat" gives up
+SDR_RETRY_WAIT_S = 10
 SDR_LOST = 3  # exit code of sib-scan.sh / gsm_scan.py when the SDR stopped answering
 
 
@@ -366,15 +368,25 @@ def job_thread(steps, ppm, env=None):
     """run the job; with "repeat" (e.g. while driving) start it again as soon as
     it ends, until Stop or until the box is unticked (the run in progress ends)"""
     run = 1
+    lost = 0
     while True:
         t0 = time.time()
         code, ppm = run_steps(steps, ppm, env)
         if hub.stop_requested or not hub.repeat:
             break
         if code == SDR_LOST:
-            hub.add_log("[webapp] SDR lost (USB errors): not repeating. Replug it and start again")
-            break
-        if code not in (0, None) and time.time() - t0 < 15:
+            lost += 1
+            if lost >= SDR_LOST_TRIES:
+                hub.add_log("[webapp] SDR lost (USB errors) %d runs in a row: not repeating. "
+                            "Replug it and start again" % lost)
+                break
+            # still enumerated but not answering: the next run opens it again, often enough
+            hub.add_log("[webapp] SDR lost (USB errors): opening it again in %d s (%d/%d)"
+                        % (SDR_RETRY_WAIT_S, lost, SDR_LOST_TRIES - 1))
+            time.sleep(SDR_RETRY_WAIT_S)
+        else:
+            lost = 0
+        if code not in (0, None, SDR_LOST) and time.time() - t0 < 15:
             # e.g. the SDR unplugged: do not spin on a run that fails at once
             hub.add_log("[webapp] run failed in %.0f s (exit code %s): not repeating" % (time.time() - t0, code))
             break

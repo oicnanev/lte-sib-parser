@@ -1131,6 +1131,7 @@ int main(int argc, char** argv)
     }
     dup2(in_fd, 0);
     dup2(out_fd, 1);
+    dup2(out_fd, 2); // libbladeRF / srsRAN errors reach the client too (it spots a lost SDR from them)
     setvbuf(stdin, nullptr, _IONBF, 0); // select() on fd 0 must see everything not yet read
     signal(SIGPIPE, SIG_IGN);
     FILE* pf = fopen((args.daemon_prefix + ".pid").c_str(), "w");
