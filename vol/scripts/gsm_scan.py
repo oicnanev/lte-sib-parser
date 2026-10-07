@@ -232,8 +232,31 @@ class DecoderRecorder:
         self.done[-1].wait(15 + 3 * (self.secs + 0.5) * len(self.jobs))
         return self.ok[i]
 
+    def rerecord(self, i):
+        """record capture i again (same file); True when it worked"""
+        band, fc, _ = self.jobs[i]
+        tuned = int(round(fc * (1 + self.ppm / 1e6)))
+        try:
+            os.write(self.fin, ("rec %s %d %.3f %s\n" % (self.files[i], tuned, self.secs + 0.05,
+                                                          self.gains[band])).encode())
+            while True:
+                line = self._line(60)
+                if line is None or line == "rec failed":
+                    return False
+                if line.startswith("recorded"):
+                    return True
+        except OSError:
+            return False
+
     def stop(self):
         pass
+
+
+def cgi_quality(res):
+    """(strong cells, strong cells with their SI3): a capture that lost samples still gives the
+    BSIC (one burst) but no SI3 even for strong cells"""
+    strong = [r for r in res if r.get("bsic") is not None and r.get("level_dbfs", -99) > -55]
+    return len(strong), sum(1 for r in strong if "ci" in r.get("si", {}).get("si3", {}))
 
 
 def kill_decoder():
@@ -306,6 +329,12 @@ def main():
             pass
         print("[gsm] using the open lte_sib_decoder at %.2f MSPS (no new open of the bladeRF)"
               % (SDRS[sdr]["rate"] / 1e6), flush=True)
+        try:
+            if open(DEC_PREFIX + ".cfg").read().split("|")[0].strip() != "1":
+                print("[gsm] WARNING: the decoder runs with two RX antennas: samples get lost over the USB and "
+                      "many cells come without SI3; run the scan with one antenna (sib-scan -A 1)", flush=True)
+        except OSError:
+            pass
     c = SDRS[sdr]
     gains = dict(c["gain"])
     if a.gain_low:
@@ -365,9 +394,23 @@ def main():
                 print("[gsm] %.1f%% of the samples clipped at %.1f MHz: lower the gain" % (100 * clip, fc / 1e6),
                       flush=True)
             print("task: gsm_decode", flush=True)
-            res = gsm_decode.decode_capture(
-                files[i], c["rate"], fc, arfcns, bw=c["bw"], jobs=a.jobs, secs=a.secs,
-                dtype=c["dtype"], full_scale=c["full"], log=lambda m: print("[gsm] " + m, flush=True))
+
+            def decode():
+                return gsm_decode.decode_capture(
+                    files[i], c["rate"], fc, arfcns, bw=c["bw"], jobs=a.jobs, secs=a.secs,
+                    dtype=c["dtype"], full_scale=c["full"], log=lambda m: print("[gsm] " + m, flush=True))
+            res = decode()
+            # samples lost while recording (a 35 ms stall of the host is enough at 30.72 MSPS x 2
+            # antennas): half the runs had strong cells without SI3. Record it once more.
+            if sdr.startswith("bladerf-dec"):
+                n_strong, n_cgi = cgi_quality(res)
+                if n_strong >= 2 and n_cgi < 0.5 * n_strong:
+                    print("[gsm] capture at %.1f MHz: %d of %d strong cells without SI3, recording it again"
+                          % (fc / 1e6, n_strong - n_cgi, n_strong), flush=True)
+                    if rec.rerecord(i):
+                        res2 = decode()
+                        if cgi_quality(res2)[1] >= n_cgi:
+                            res = res2
             keep = os.environ.get("LTE_GSM_KEEP")  # directory: keep the captures for offline experiments
             if keep:
                 os.makedirs(keep, exist_ok=True)

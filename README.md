@@ -1492,6 +1492,21 @@ Changes in this fork, newest last, with the reason for each.
     disconnect), the same open -> drop pattern as before. `LTE_GSM_KEEP=<dir>`
     keeps the captures (`gsm_scan.py`) to study the missing SI3 offline.
 
+    **Cause of the missing CGI found (2026-10-07):** the daemon ran with
+    `-A 2` (RX1 + RX2, the web app's bladeRF default), 245 MB/s over the
+    virtual USB: the host stalls for more than the ~35 ms libbladeRF buffers
+    and samples are lost, silently (no metadata). A GSM block decode needs
+    continuous samples (the BSIC, one burst, still comes out). Same place,
+    same daemon, back to back: `-A 2` gave 28, 3, 9, 2, 7, 6, 29, 14, 15, 24,
+    24 CGI per run (bimodal, correlated in time, the decoder itself is
+    deterministic on a given file); **`-A 1`: 28, 26, 26, 28, 23, 29, 27, 27
+    in 8 runs**, 11 s per 2G step. So with "Also 2G" / "2G only" the web app
+    now starts the daemon with one antenna (RX1); LTE-only runs keep the
+    antennas field. `gsm_scan.py` also re-records a capture once when most
+    strong cells have no SI3 (helps about half of the time; the stalls come in
+    episodes), and warns when the daemon has two antennas. Open: LTE with two
+    antennas would need the stream to switch to RX_X1 for the 2G captures.
+
 ### Known limitations
 
 - 20 MHz cells on a HackRF are saved as detection-only readings (no SIBs).

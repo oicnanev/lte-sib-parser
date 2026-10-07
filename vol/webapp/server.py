@@ -676,7 +676,10 @@ def antenna_args(p):
     opening it is what drops it off a VM's USB bus) and -A 2 (RX1 + RX2)"""
     if p.get("device") != "bladeRF":
         return []
-    return (["-P"] + (["-A", "2"] if str(p.get("antennas", "1")) == "2" else [])
+    # RX1 + RX2 is 245 MB/s over the (virtual) USB: GSM captures lost samples and half of the
+    # runs decoded no SI3 (A/B on 2026-10-07: 8 runs of 23-29 CGI with one antenna, erratic with two)
+    two = str(p.get("antennas", "1")) == "2" and not p.get("gsm") and p.get("mode") != "gsm"
+    return (["-P"] + (["-A", "2"] if two else [])
             + (["-r", "61.44e6"] if str(p.get("srate", "")) == "61.44" else []))
 
 
@@ -739,6 +742,9 @@ def start_scan(params):
     env = scan_env(params)
     with hub.lock:
         hub.log.clear()
+    if (params.get("device") == "bladeRF" and str(params.get("antennas", "1")) == "2"
+            and (params.get("gsm") or params.get("mode") == "gsm")):
+        hub.add_log("[webapp] 2G with a bladeRF uses RX1 only: two antennas lose samples over the USB")
     hub.stop_requested = False
     hub.repeat = bool(params.get("repeat"))
     now = readings_db.now()
