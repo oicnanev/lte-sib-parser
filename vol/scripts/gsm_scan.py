@@ -346,6 +346,8 @@ def main():
                 print("[gsm] capture at %.1f MHz failed (is the SDR connected and free?)" % (fc / 1e6), flush=True)
                 print("ERROR: the SDR stopped answering: unplug and replug it (in a VM also re-attach it)", flush=True)
                 return 3
+            print("[gsm] capture %d/%d at %.1f MHz ready %.1f s after the start" % (i + 1, len(jobs), fc / 1e6,
+                                                                              time.time() - t0), flush=True)
             clip = clipping(files[i], sdr)
             if clip > 0.002:
                 print("[gsm] %.1f%% of the samples clipped at %.1f MHz: lower the gain" % (100 * clip, fc / 1e6),
