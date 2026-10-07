@@ -1389,6 +1389,11 @@ Changes in this fork, newest last, with the reason for each.
     The web app now waits
     `STEP_GAP_S` (2 s) between steps, to cut the open/close churn; whether
     that is enough is still to be confirmed over several Runs.
+    Second drop, same day, with the 2 s pause in place: 4 resets, then the
+    disconnect at the `gsm_scan.py` -> LTE hand-over (the first drop was at
+    the LTE -> `gsm_scan.py` one), and the next LTE step then ran 37 s with
+    0 readings. So the pause is not enough: both drops hit a change between
+    `gsm_scan.py`'s `bladeRF-cli` and `lte_sib_decoder`.
 
 ### Known limitations
 
